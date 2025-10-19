@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.4.1: Add E key for P1 break, R button for P2 break, XYBA+axes[2][3] for P2 move, render outer walls in view, fix global checker pattern
+// v0.4.2: Fix Joy-Con unified input, add touch UI controls, improve responsiveness
+// Commit: v0.4.2: Fix Joy-Con unified input, add touch UI controls, improve responsiveness
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -13,20 +14,63 @@ const MazeBattleGame = () => {
   const [footprints2, setFootprints2] = useState(new Set());
   const [wallBreaks1, setWallBreaks1] = useState(3);
   const [wallBreaks2, setWallBreaks2] = useState(3);
+  const [brokenWalls, setBrokenWalls] = useState(new Set());
   const [particles, setParticles] = useState([]);
   const [winner, setWinner] = useState(null);
   const [touchStart1, setTouchStart1] = useState(null);
   const [touchStart2, setTouchStart2] = useState(null);
   const [gamepadDebug, setGamepadDebug] = useState('');
+  const [pressedKeys, setPressedKeys] = useState(new Set());
+  const [cellSize, setCellSize] = useState(18);
+  const [showFullMaze, setShowFullMaze] = useState(false);
   
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const lastMoveRef = useRef({ p1: 0, p2: 0 });
+  const audioContextRef = useRef(null);
 
   const MAZE_SIZE = 43;
-  const CELL_SIZE = 18;
   const VISIBILITY = 5;
   const MOVE_DELAY = 120;
+
+  // Dynamic cell size calculation
+  useEffect(() => {
+    const updateCellSize = () => {
+      const availableHeight = window.innerHeight - 250;
+      const availableWidth = window.innerWidth - 100;
+      const maxCellSize = Math.min(
+        Math.floor(availableHeight / 11),
+        Math.floor(availableWidth / 24)
+      );
+      const newCellSize = Math.max(18, Math.min(maxCellSize, 32));
+      setCellSize(newCellSize);
+    };
+
+    updateCellSize();
+    window.addEventListener('resize', updateCellSize);
+    return () => window.removeEventListener('resize', updateCellSize);
+  }, []);
+
+  // Sound effect
+  const playBreakSound = () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    const ctx = audioContextRef.current;
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    
+    oscillator.frequency.value = 150;
+    oscillator.type = 'sawtooth';
+    gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+    
+    oscillator.start(ctx.currentTime);
+    oscillator.stop(ctx.currentTime + 0.3);
+  };
 
   const generateMaze = () => {
     const maze = Array(MAZE_SIZE).fill().map(() => Array(MAZE_SIZE).fill(1));
@@ -77,8 +121,10 @@ const MazeBattleGame = () => {
     setFootprints2(new Set(['41,41']));
     setWallBreaks1(3);
     setWallBreaks2(3);
+    setBrokenWalls(new Set());
     setParticles([]);
     setWinner(null);
+    setShowFullMaze(false);
     setGameState('playing');
     lastMoveRef.current = { p1: Date.now(), p2: Date.now() };
   };
@@ -88,6 +134,9 @@ const MazeBattleGame = () => {
     const lastMove = playerNum === 1 ? lastMoveRef.current.p1 : lastMoveRef.current.p2;
     if (now - lastMove < MOVE_DELAY) return;
 
+    // Always update direction
+    setDirection({ dx, dy });
+
     const newX = player.x + dx;
     const newY = player.y + dy;
 
@@ -96,7 +145,6 @@ const MazeBattleGame = () => {
       const goalY = playerNum === 1 ? 41 : 1;
 
       setPlayer({ x: newX, y: newY });
-      setDirection({ dx, dy });
 
       if (playerNum === 1) {
         setFootprints1(prev => new Set([...prev, `${newX},${newY}`]));
@@ -124,12 +172,15 @@ const MazeBattleGame = () => {
       const newMaze = maze.map(row => [...row]);
       newMaze[wallY][wallX] = 0;
       setMaze(newMaze);
+      setBrokenWalls(prev => new Set([...prev, `${wallX},${wallY}`]));
 
       if (playerNum === 1) {
         setWallBreaks1(breaks - 1);
       } else {
         setWallBreaks2(breaks - 1);
       }
+
+      playBreakSound();
 
       const newParticles = [];
       for (let i = 0; i < 8; i++) {
@@ -148,6 +199,7 @@ const MazeBattleGame = () => {
     }
   };
 
+  // Gamepad input - unified Joy-Con handling
   useEffect(() => {
     if (gameState !== 'playing') return;
 
@@ -173,65 +225,45 @@ const MazeBattleGame = () => {
         debugInfo.push(gpInfo);
       }
       
-      // Player 1: Joy-Con(L)
+      // Unified Joy-Con handling (both L and R on gamepads[0])
       if (gamepads[0]) {
         const gp = gamepads[0];
-        const axes = [gp.axes[0] || 0, gp.axes[1] || 0];
         const threshold = 0.5;
         
-        if (Math.abs(axes[0]) > threshold || Math.abs(axes[1]) > threshold) {
-          const dx = Math.abs(axes[0]) > Math.abs(axes[1]) ? (axes[0] > 0 ? 1 : -1) : 0;
-          const dy = Math.abs(axes[1]) > Math.abs(axes[0]) ? (axes[1] > 0 ? 1 : -1) : 0;
+        // Player 1: Joy-Con(L) - axes[0], axes[1] and L-side buttons
+        const axes01 = [gp.axes[0] || 0, gp.axes[1] || 0];
+        if (Math.abs(axes01[0]) > threshold || Math.abs(axes01[1]) > threshold) {
+          const dx = Math.abs(axes01[0]) > Math.abs(axes01[1]) ? (axes01[0] > 0 ? 1 : -1) : 0;
+          const dy = Math.abs(axes01[1]) > Math.abs(axes01[0]) ? (axes01[1] > 0 ? 1 : -1) : 0;
           movePlayer(player1, setPlayer1, dx, dy, 1, setDirection1);
         }
         
+        // Player 1: D-pad (buttons 12-15)
         if (gp.buttons[12]?.pressed) movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1);
         if (gp.buttons[13]?.pressed) movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1);
         if (gp.buttons[14]?.pressed) movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1);
         if (gp.buttons[15]?.pressed) movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1);
         
-        if (gp.buttons[4]?.pressed) breakWall(player1, direction1, 1); // L button
-      }
-
-      // Player 2: Joy-Con(R)
-      if (gamepads[1]) {
-        const gp = gamepads[1];
-        const threshold = 0.5;
-        let moved = false;
+        // Player 1: L button for break
+        if (gp.buttons[4]?.pressed) breakWall(player1, direction1, 1);
         
-        // axes[0], axes[1] をチェック
-        const axes01 = [gp.axes[0] || 0, gp.axes[1] || 0];
-        if (Math.abs(axes01[0]) > threshold || Math.abs(axes01[1]) > threshold) {
-          const dx = Math.abs(axes01[0]) > Math.abs(axes01[1]) ? (axes01[0] > 0 ? 1 : -1) : 0;
-          const dy = Math.abs(axes01[1]) > Math.abs(axes01[0]) ? (axes01[1] > 0 ? 1 : -1) : 0;
-          movePlayer(player2, setPlayer2, dx, dy, 2, setDirection2);
-          moved = true;
-        }
-        
-        // axes[2], axes[3] もチェック（Joy-Con R の下側スティック）
-        if (!moved && gp.axes.length > 3) {
+        // Player 2: Joy-Con(R) - axes[2], axes[3] and R-side buttons
+        if (gp.axes.length > 3) {
           const axes23 = [gp.axes[2] || 0, gp.axes[3] || 0];
           if (Math.abs(axes23[0]) > threshold || Math.abs(axes23[1]) > threshold) {
             const dx = Math.abs(axes23[0]) > Math.abs(axes23[1]) ? (axes23[0] > 0 ? 1 : -1) : 0;
             const dy = Math.abs(axes23[1]) > Math.abs(axes23[0]) ? (axes23[1] > 0 ? 1 : -1) : 0;
             movePlayer(player2, setPlayer2, dx, dy, 2, setDirection2);
-            moved = true;
           }
         }
         
-        // XYBA ボタン（X:上 Y:左 B:下 A:右）
-        if (gp.buttons[0]?.pressed) movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2);  // A (右)
-        if (gp.buttons[1]?.pressed) movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2);  // B (下)
-        if (gp.buttons[2]?.pressed) movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2); // X (上)
-        if (gp.buttons[3]?.pressed) movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2); // Y (左)
+        // Player 2: XYBA buttons (0-3)
+        if (gp.buttons[0]?.pressed) movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2);  // A
+        if (gp.buttons[1]?.pressed) movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2);  // B
+        if (gp.buttons[2]?.pressed) movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2); // X
+        if (gp.buttons[3]?.pressed) movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2); // Y
         
-        // 十字ボタン
-        if (gp.buttons[12]?.pressed) movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2);
-        if (gp.buttons[13]?.pressed) movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2);
-        if (gp.buttons[14]?.pressed) movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2);
-        if (gp.buttons[15]?.pressed) movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2);
-        
-        // 破壊: R ボタン (button 5)
+        // Player 2: R button for break
         if (gp.buttons[5]?.pressed) breakWall(player2, direction2, 2);
       }
 
@@ -244,117 +276,75 @@ const MazeBattleGame = () => {
 
     animationRef.current = requestAnimationFrame(checkGamepad);
     return () => cancelAnimationFrame(animationRef.current);
-  }, [gameState, player1, player2, maze, direction1, direction2]);
+  }, [gameState, player1, player2, maze, direction1, direction2, cellSize]);
 
+  // Keyboard input with key repeat
   useEffect(() => {
+    if (gameState === 'menu' || gameState === 'finished') {
+      const handleMenuKey = (e) => {
+        if (e.key === 'Enter') {
+          startGame();
+        }
+      };
+      window.addEventListener('keydown', handleMenuKey);
+      return () => window.removeEventListener('keydown', handleMenuKey);
+    }
+
     if (gameState !== 'playing') return;
 
     const handleKeyDown = (e) => {
-      let handled = false;
-
-      // Player 1 movement
-      if (e.key === 'w' || e.key === 'W') { movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1); handled = true; }
-      if (e.key === 's' || e.key === 'S') { movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1); handled = true; }
-      if (e.key === 'a' || e.key === 'A') { movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1); handled = true; }
-      if (e.key === 'd' || e.key === 'D') { movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1); handled = true; }
+      setPressedKeys(prev => new Set([...prev, e.key]));
       
-      // Player 1 break: Shift or E
-      if (e.key === 'Shift' || e.key === 'e' || e.key === 'E') { breakWall(player1, direction1, 1); handled = true; }
-
-      // Player 2 movement
-      if (e.key === 'ArrowUp' || e.key === 'i' || e.key === 'I') { movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2); handled = true; }
-      if (e.key === 'ArrowDown' || e.key === 'k' || e.key === 'K') { movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2); handled = true; }
-      if (e.key === 'ArrowLeft' || e.key === 'j' || e.key === 'J') { movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2); handled = true; }
-      if (e.key === 'ArrowRight' || e.key === 'l' || e.key === 'L') { movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2); handled = true; }
-      
-      // Player 2 break: U or Space
-      if (e.key === 'u' || e.key === 'U' || e.key === ' ') { breakWall(player2, direction2, 2); handled = true; }
-
-      if (handled) {
+      // Immediate break action
+      if (e.key === 'Shift' || e.key === 'e' || e.key === 'E') {
+        breakWall(player1, direction1, 1);
         e.preventDefault();
-        e.stopPropagation();
       }
+      if (e.key === 'u' || e.key === 'U' || e.key === ' ') {
+        breakWall(player2, direction2, 2);
+        e.preventDefault();
+      }
+    };
+
+    const handleKeyUp = (e) => {
+      setPressedKeys(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(e.key);
+        return newSet;
+      });
     };
 
     window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', handleKeyUp, true);
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('keyup', handleKeyUp, true);
+    };
   }, [gameState, player1, player2, maze, direction1, direction2]);
 
+  // Continuous key movement
   useEffect(() => {
     if (gameState !== 'playing') return;
 
-    const handleTouch = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
+    const interval = setInterval(() => {
+      pressedKeys.forEach(key => {
+        if (key === 'w' || key === 'W') movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1);
+        if (key === 's' || key === 'S') movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1);
+        if (key === 'a' || key === 'A') movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1);
+        if (key === 'd' || key === 'D') movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1);
+        
+        if (key === 'ArrowUp' || key === 'i' || key === 'I') movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2);
+        if (key === 'ArrowDown' || key === 'k' || key === 'K') movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2);
+        if (key === 'ArrowLeft' || key === 'j' || key === 'J') movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2);
+        if (key === 'ArrowRight' || key === 'l' || key === 'L') movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2);
+      });
+    }, MOVE_DELAY);
 
-      for (let i = 0; i < e.touches.length; i++) {
-        const touch = e.touches[i];
-        const isLeftSide = touch.clientX < window.innerWidth / 2;
+    return () => clearInterval(interval);
+  }, [gameState, pressedKeys, player1, player2, maze, direction1, direction2]);
 
-        if (e.type === 'touchstart') {
-          if (isLeftSide) {
-            setTouchStart1({ x: touch.clientX, y: touch.clientY });
-          } else {
-            setTouchStart2({ x: touch.clientX, y: touch.clientY });
-          }
-        } else if (e.type === 'touchmove') {
-          const start = isLeftSide ? touchStart1 : touchStart2;
-          if (!start) continue;
-
-          const dx = touch.clientX - start.x;
-          const dy = touch.clientY - start.y;
-          const threshold = 30;
-
-          if (Math.abs(dx) > threshold || Math.abs(dy) > threshold) {
-            if (Math.abs(dx) > Math.abs(dy)) {
-              movePlayer(
-                isLeftSide ? player1 : player2,
-                isLeftSide ? setPlayer1 : setPlayer2,
-                dx > 0 ? 1 : -1,
-                0,
-                isLeftSide ? 1 : 2,
-                isLeftSide ? setDirection1 : setDirection2
-              );
-            } else {
-              movePlayer(
-                isLeftSide ? player1 : player2,
-                isLeftSide ? setPlayer1 : setPlayer2,
-                0,
-                dy > 0 ? 1 : -1,
-                isLeftSide ? 1 : 2,
-                isLeftSide ? setDirection1 : setDirection2
-              );
-            }
-
-            if (isLeftSide) {
-              setTouchStart1({ x: touch.clientX, y: touch.clientY });
-            } else {
-              setTouchStart2({ x: touch.clientX, y: touch.clientY });
-            }
-          }
-        }
-      }
-    };
-
-    const handleTouchEnd = (e) => {
-      e.preventDefault();
-      if (e.touches.length === 0) {
-        setTouchStart1(null);
-        setTouchStart2(null);
-      }
-    };
-
-    document.addEventListener('touchstart', handleTouch, { passive: false });
-    document.addEventListener('touchmove', handleTouch, { passive: false });
-    document.addEventListener('touchend', handleTouchEnd, { passive: false });
-
-    return () => {
-      document.removeEventListener('touchstart', handleTouch);
-      document.removeEventListener('touchmove', handleTouch);
-      document.removeEventListener('touchend', handleTouchEnd);
-    };
-  }, [gameState, player1, player2, maze, touchStart1, touchStart2]);
-
+  // Particle update
   useEffect(() => {
     if (gameState !== 'playing') return;
 
@@ -376,6 +366,7 @@ const MazeBattleGame = () => {
     return () => clearInterval(interval);
   }, [gameState]);
 
+  // Canvas rendering
   useEffect(() => {
     if (gameState !== 'playing' || !canvasRef.current) return;
 
@@ -393,114 +384,120 @@ const MazeBattleGame = () => {
           const x = player.x + dx;
           const y = player.y + dy;
 
-          const screenX = offsetX + (dx + VISIBILITY) * CELL_SIZE;
-          const screenY = (dy + VISIBILITY) * CELL_SIZE;
+          const screenX = offsetX + (dx + VISIBILITY) * cellSize;
+          const screenY = (dy + VISIBILITY) * cellSize;
 
-          // 範囲外または壁
           const isOutOfBounds = x < 0 || x >= MAZE_SIZE || y < 0 || y >= MAZE_SIZE;
           const isWall = isOutOfBounds || maze[y][x] === 1;
           
           if (isWall) {
-            // 壁（ひび割れた岩風グラフィック）
-            const gradient = ctx.createLinearGradient(screenX, screenY, screenX + CELL_SIZE, screenY + CELL_SIZE);
+            const gradient = ctx.createLinearGradient(screenX, screenY, screenX + cellSize, screenY + cellSize);
             gradient.addColorStop(0, '#5a5a5a');
             gradient.addColorStop(0.5, '#3a3a3a');
             gradient.addColorStop(1, '#2a2a2a');
             ctx.fillStyle = gradient;
-            ctx.fillRect(screenX, screenY, CELL_SIZE, CELL_SIZE);
+            ctx.fillRect(screenX, screenY, cellSize, cellSize);
             
             ctx.strokeStyle = '#1a1a1a';
             ctx.lineWidth = 0.5;
             ctx.globalAlpha = 0.6;
             ctx.beginPath();
             ctx.moveTo(screenX + 2, screenY + 1);
-            ctx.lineTo(screenX + CELL_SIZE - 3, screenY + CELL_SIZE - 2);
+            ctx.lineTo(screenX + cellSize - 3, screenY + cellSize - 2);
             ctx.stroke();
             ctx.beginPath();
-            ctx.moveTo(screenX + CELL_SIZE - 2, screenY + 3);
-            ctx.lineTo(screenX + 1, screenY + CELL_SIZE - 1);
+            ctx.moveTo(screenX + cellSize - 2, screenY + 3);
+            ctx.lineTo(screenX + 1, screenY + cellSize - 1);
             ctx.stroke();
             ctx.globalAlpha = 1.0;
           } else {
-            // 床（グローバル市松模様）
+            // Floor with darker color for broken walls
+            const isBroken = brokenWalls.has(`${x},${y}`);
             const checkerSize = 3;
-            for (let cy = 0; cy < CELL_SIZE; cy += checkerSize) {
-              for (let cx = 0; cx < CELL_SIZE; cx += checkerSize) {
-                // グローバル座標を考慮した市松模様
-                const globalX = x * CELL_SIZE + cx;
-                const globalY = y * CELL_SIZE + cy;
+            for (let cy = 0; cy < cellSize; cy += checkerSize) {
+              for (let cx = 0; cx < cellSize; cx += checkerSize) {
+                const globalX = x * cellSize + cx;
+                const globalY = y * cellSize + cy;
                 const isCheckerDark = ((Math.floor(globalX / checkerSize) + Math.floor(globalY / checkerSize)) % 2) === 0;
-                ctx.fillStyle = isCheckerDark ? '#6B4423' : '#8B5A2B';
+                
+                let darkColor, lightColor;
+                if (isBroken) {
+                  darkColor = '#4a3019';
+                  lightColor = '#5a3a1f';
+                } else {
+                  darkColor = '#6B4423';
+                  lightColor = '#8B5A2B';
+                }
+                
+                ctx.fillStyle = isCheckerDark ? darkColor : lightColor;
                 ctx.fillRect(screenX + cx, screenY + cy, checkerSize, checkerSize);
               }
             }
 
-            // 足跡
+            // Goal floor with player color
+            if (x === goalX && y === goalY) {
+              ctx.fillStyle = playerNum === 1 ? 'rgba(220, 20, 60, 0.5)' : 'rgba(65, 105, 225, 0.5)';
+              ctx.fillRect(screenX + 2, screenY + 2, cellSize - 4, cellSize - 4);
+            }
+
+            // Footprints
             if (footprints.has(`${x},${y}`)) {
               const gradient = ctx.createRadialGradient(
-                screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2, 0,
-                screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2, CELL_SIZE / 2
+                screenX + cellSize / 2, screenY + cellSize / 2, 0,
+                screenX + cellSize / 2, screenY + cellSize / 2, cellSize / 2
               );
               gradient.addColorStop(0, playerNum === 1 ? 'rgba(255, 80, 80, 0.7)' : 'rgba(80, 80, 255, 0.7)');
               gradient.addColorStop(1, playerNum === 1 ? 'rgba(255, 80, 80, 0.2)' : 'rgba(80, 80, 255, 0.2)');
               ctx.fillStyle = gradient;
-              ctx.fillRect(screenX + 3, screenY + 3, CELL_SIZE - 6, CELL_SIZE - 6);
+              ctx.fillRect(screenX + 3, screenY + 3, cellSize - 6, cellSize - 6);
             }
             if (otherFootprints.has(`${x},${y}`)) {
               const gradient = ctx.createRadialGradient(
-                screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2, 0,
-                screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2, CELL_SIZE / 2
+                screenX + cellSize / 2, screenY + cellSize / 2, 0,
+                screenX + cellSize / 2, screenY + cellSize / 2, cellSize / 2
               );
               gradient.addColorStop(0, playerNum === 1 ? 'rgba(80, 80, 255, 0.7)' : 'rgba(255, 80, 80, 0.7)');
               gradient.addColorStop(1, playerNum === 1 ? 'rgba(80, 80, 255, 0.2)' : 'rgba(255, 80, 80, 0.2)');
               ctx.fillStyle = gradient;
-              ctx.fillRect(screenX + 3, screenY + 3, CELL_SIZE - 6, CELL_SIZE - 6);
-            }
-
-            // ゴール
-            if (x === goalX && y === goalY) {
-              ctx.fillStyle = '#FFD700';
-              ctx.fillRect(screenX + 4, screenY + 4, CELL_SIZE - 8, CELL_SIZE - 8);
-              ctx.fillStyle = '#FFA500';
-              ctx.fillRect(screenX + 6, screenY + 6, CELL_SIZE - 12, CELL_SIZE - 12);
+              ctx.fillRect(screenX + 3, screenY + 3, cellSize - 6, cellSize - 6);
             }
           }
         }
       }
 
-      // 相手プレイヤー
+      // Other player
       const otherDx = otherPlayer.x - player.x;
       const otherDy = otherPlayer.y - player.y;
       if (Math.abs(otherDx) <= VISIBILITY && Math.abs(otherDy) <= VISIBILITY) {
-        const otherScreenX = offsetX + (otherDx + VISIBILITY) * CELL_SIZE;
-        const otherScreenY = (otherDy + VISIBILITY) * CELL_SIZE;
+        const otherScreenX = offsetX + (otherDx + VISIBILITY) * cellSize;
+        const otherScreenY = (otherDy + VISIBILITY) * cellSize;
         
         ctx.fillStyle = playerNum === 1 ? '#4169E1' : '#DC143C';
         ctx.beginPath();
-        ctx.arc(otherScreenX + CELL_SIZE / 2, otherScreenY + CELL_SIZE / 2 + 2, CELL_SIZE / 2.5, 0, Math.PI * 2);
+        ctx.arc(otherScreenX + cellSize / 2, otherScreenY + cellSize / 2 + 2, cellSize / 2.5, 0, Math.PI * 2);
         ctx.fill();
         
         ctx.fillStyle = '#FFF';
-        ctx.fillRect(otherScreenX + CELL_SIZE / 3, otherScreenY + CELL_SIZE / 3, 3, 3);
-        ctx.fillRect(otherScreenX + CELL_SIZE * 2 / 3 - 3, otherScreenY + CELL_SIZE / 3, 3, 3);
+        ctx.fillRect(otherScreenX + cellSize / 3, otherScreenY + cellSize / 3, 3, 3);
+        ctx.fillRect(otherScreenX + cellSize * 2 / 3 - 3, otherScreenY + cellSize / 3, 3, 3);
       }
 
-      // 自分のプレイヤー
-      const playerScreenX = offsetX + VISIBILITY * CELL_SIZE;
-      const playerScreenY = VISIBILITY * CELL_SIZE;
+      // Self player
+      const playerScreenX = offsetX + VISIBILITY * cellSize;
+      const playerScreenY = VISIBILITY * cellSize;
       
       ctx.fillStyle = playerNum === 1 ? '#DC143C' : '#4169E1';
       ctx.beginPath();
-      ctx.arc(playerScreenX + CELL_SIZE / 2, playerScreenY + CELL_SIZE / 2 + 2, CELL_SIZE / 2.5, 0, Math.PI * 2);
+      ctx.arc(playerScreenX + cellSize / 2, playerScreenY + cellSize / 2 + 2, cellSize / 2.5, 0, Math.PI * 2);
       ctx.fill();
       
-      // 目の向き
+      // Eyes direction
       ctx.fillStyle = '#FFF';
       const eyeSize = 3;
-      const eyeOffset = CELL_SIZE / 4;
+      const eyeOffset = cellSize / 4;
       
-      const centerX = playerScreenX + CELL_SIZE / 2;
-      const centerY = playerScreenY + CELL_SIZE / 2;
+      const centerX = playerScreenX + cellSize / 2;
+      const centerY = playerScreenY + cellSize / 2;
       
       let eye1X, eye1Y, eye2X, eye2Y;
       
@@ -530,19 +527,19 @@ const MazeBattleGame = () => {
       ctx.fillRect(eye2X - eyeSize / 2, eye2Y - eyeSize / 2, eyeSize, eyeSize);
     };
 
-    const viewWidth = (VISIBILITY * 2 + 1) * CELL_SIZE;
+    const viewWidth = (VISIBILITY * 2 + 1) * cellSize;
     drawPlayerView(player1, player2, footprints1, 0, 1, direction1);
     drawPlayerView(player2, player1, footprints2, viewWidth + 30, 2, direction2);
 
-    // パーティクル描画
+    // Particles
     particles.forEach(p => {
       const dx = p.x - (p.playerNum === 1 ? player1.x : player2.x);
       const dy = p.y - (p.playerNum === 1 ? player1.y : player2.y);
       
       if (Math.abs(dx) <= VISIBILITY && Math.abs(dy) <= VISIBILITY) {
         const offsetX = p.playerNum === 1 ? 0 : viewWidth + 30;
-        const screenX = offsetX + (dx + VISIBILITY) * CELL_SIZE + p.vx * 2;
-        const screenY = (dy + VISIBILITY) * CELL_SIZE + p.vy * 2;
+        const screenX = offsetX + (dx + VISIBILITY) * cellSize + p.vx * 2;
+        const screenY = (dy + VISIBILITY) * cellSize + p.vy * 2;
         
         ctx.fillStyle = p.playerNum === 1 ? `rgba(255, 100, 100, ${p.life / 30})` : `rgba(100, 100, 255, ${p.life / 30})`;
         ctx.beginPath();
@@ -550,10 +547,74 @@ const MazeBattleGame = () => {
         ctx.fill();
       }
     });
-  }, [gameState, player1, player2, direction1, direction2, footprints1, footprints2, maze, particles]);
 
-  const canvasWidth = ((VISIBILITY * 2 + 1) * CELL_SIZE) * 2 + 30;
-  const canvasHeight = (VISIBILITY * 2 + 1) * CELL_SIZE;
+    // Center divider
+    ctx.fillStyle = '#000';
+    ctx.fillRect(viewWidth + 12, 0, 6, canvas.height);
+    ctx.fillStyle = '#1E90FF';
+    ctx.fillRect(viewWidth + 13, 1, 4, canvas.height - 2);
+  }, [gameState, player1, player2, direction1, direction2, footprints1, footprints2, maze, particles, brokenWalls, cellSize]);
+
+  const handleDPad = (dx, dy, playerNum) => {
+    if (playerNum === 1) {
+      movePlayer(player1, setPlayer1, dx, dy, 1, setDirection1);
+    } else {
+      movePlayer(player2, setPlayer2, dx, dy, 2, setDirection2);
+    }
+  };
+
+  const handleBreakButton = (playerNum) => {
+    if (playerNum === 1) {
+      breakWall(player1, direction1, 1);
+    } else {
+      breakWall(player2, direction2, 2);
+    }
+  };
+
+  const canvasWidth = ((VISIBILITY * 2 + 1) * cellSize) * 2 + 30;
+  const canvasHeight = (VISIBILITY * 2 + 1) * cellSize;
+
+  const DPadButton = ({ direction, onClick, style }) => (
+    <button
+      onTouchStart={(e) => { e.preventDefault(); onClick(); }}
+      onClick={onClick}
+      className="w-12 h-12 bg-gray-700 active:bg-gray-500 rounded flex items-center justify-center text-white font-bold select-none"
+      style={style}
+    >
+      {direction === 'up' && '▲'}
+      {direction === 'down' && '▼'}
+      {direction === 'left' && '◀'}
+      {direction === 'right' && '▶'}
+    </button>
+  );
+
+  const ControlPanel = ({ playerNum, wallBreaks, color }) => (
+    <div className="flex flex-col items-center gap-2">
+      <div className="relative w-40 h-40">
+        <DPadButton direction="up" onClick={() => handleDPad(0, -1, playerNum)} 
+          style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }} />
+        <DPadButton direction="down" onClick={() => handleDPad(0, 1, playerNum)} 
+          style={{ position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)' }} />
+        <DPadButton direction="left" onClick={() => handleDPad(-1, 0, playerNum)} 
+          style={{ position: 'absolute', top: '50%', left: 0, transform: 'translateY(-50%)' }} />
+        <DPadButton direction="right" onClick={() => handleDPad(1, 0, playerNum)} 
+          style={{ position: 'absolute', top: '50%', right: 0, transform: 'translateY(-50%)' }} />
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-gray-800 rounded"></div>
+      </div>
+      <div className="flex gap-1">
+        {[...Array(wallBreaks)].map((_, i) => (
+          <button
+            key={i}
+            onTouchStart={(e) => { e.preventDefault(); handleBreakButton(playerNum); }}
+            onClick={() => handleBreakButton(playerNum)}
+            className="text-2xl active:scale-90 transition-transform select-none"
+          >
+            🧨
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
@@ -567,11 +628,10 @@ const MazeBattleGame = () => {
             <ul className="space-y-2 text-sm">
               <li>🔴 Player 1: 左上スタート → 右下ゴールで勝利</li>
               <li>🔵 Player 2: 右下スタート → 左上ゴールで勝利</li>
-              <li>📱 タッチ: 画面左半分/右半分をスワイプ</li>
-              <li>⌨️ キーボード: WASD / 矢印キー or IJKL</li>
-              <li>🎮 Joy-Con(L): レバー、十字、Lボタン</li>
-              <li>🎮 Joy-Con(R): レバー、XYBA、十字、Rボタン</li>
-              <li>💣 破壊: P1はShift/E/L / P2はU/Space/R</li>
+              <li>📱 タッチ: 画面の十字ボタン / 爆弾タップで破壊</li>
+              <li>⌨️ キーボード: WASD / 矢印キー or IJKL (押しっぱなしOK)</li>
+              <li>🎮 Joy-Con(L+R): レバー、ボタン全対応</li>
+              <li>💣 破壊: P1はShift/E/L / P2はU/Space/R (各3回)</li>
               <li>👣 足跡が相手に見える!</li>
               <li>👀 視界内なら相手も見える!</li>
             </ul>
@@ -585,18 +645,14 @@ const MazeBattleGame = () => {
               boxShadow: '0 4px 0 #8B4513'
             }}
           >
-            ゲーム開始
+            ゲーム開始 (Enter)
           </button>
         </div>
       )}
 
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
-          <div className="text-xs mb-2 text-gray-400">v0.4.1</div>
-          <div className="flex gap-12 mb-2 text-sm">
-            <div style={{color: '#FF6B6B'}}>🔴 破壊: {wallBreaks1}</div>
-            <div style={{color: '#6B9BFF'}}>🔵 破壊: {wallBreaks2}</div>
-          </div>
+          <div className="text-xs mb-2 text-gray-400">v0.4.2</div>
           <canvas
             ref={canvasRef}
             width={canvasWidth}
@@ -604,9 +660,13 @@ const MazeBattleGame = () => {
             className="rounded"
             style={{border: '6px solid #8B4513', boxShadow: '0 0 20px rgba(255, 215, 0, 0.3)'}}
           />
-          <div className="mt-4 text-center text-sm space-y-1 w-full">
-            <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / 画面左 / Joy-Con(L) | 破壊: Shift/E/L</p>
-            <p style={{color: '#6B9BFF'}}>🔵 P2: 矢印/IJKL / 画面右 / Joy-Con(R) | 破壊: U/Space/R</p>
+          <div className="flex gap-8 mt-4 w-full justify-center">
+            <ControlPanel playerNum={1} wallBreaks={wallBreaks1} color="#DC143C" />
+            <ControlPanel playerNum={2} wallBreaks={wallBreaks2} color="#4169E1" />
+          </div>
+          <div className="mt-4 text-center text-xs space-y-1 w-full max-w-4xl">
+            <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / Joy-Con(L) | 破壊: Shift/E/L</p>
+            <p style={{color: '#6B9BFF'}}>🔵 P2: 矢印/IJKL / Joy-Con(R) | 破壊: U/Space/R</p>
             {gamepadDebug && (
               <div className="mt-3 p-3 bg-gray-900 rounded border border-gray-700 text-xs text-white font-mono">
                 <div style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}}>{gamepadDebug}</div>
@@ -617,24 +677,109 @@ const MazeBattleGame = () => {
       )}
 
       {gameState === 'finished' && (
-        <div className="text-center">
-          <h1 className="text-6xl font-bold mb-8" style={{
-            color: winner === 1 ? '#FF6B6B' : '#6B9BFF',
-            textShadow: '4px 4px 0 #000'
-          }}>
-            {winner === 1 ? '🔴 Player 1' : '🔵 Player 2'}<br/>の勝利!
-          </h1>
-          <button
-            onClick={startGame}
-            className="px-8 py-3 rounded-lg text-xl font-bold"
-            style={{
-              background: '#32CD32',
-              border: '4px solid #FFD700',
-              boxShadow: '0 4px 0 #228B22'
-            }}
-          >
-            もう一度プレイ
-          </button>
+        <div className="flex flex-col items-center">
+          <div className="relative">
+            <canvas
+              ref={canvasRef}
+              width={canvasWidth}
+              height={canvasHeight}
+              className="rounded"
+              style={{border: '6px solid #8B4513', boxShadow: '0 0 20px rgba(255, 215, 0, 0.3)'}}
+            />
+            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-75 rounded">
+              <div className="text-center">
+                <h1 className="text-6xl font-bold mb-4" style={{
+                  color: winner === 1 ? '#FF6B6B' : '#6B9BFF',
+                  textShadow: '4px 4px 0 #000'
+                }}>
+                  {winner === 1 ? '🔴 Player 1' : '🔵 Player 2'}<br/>の勝利!
+                </h1>
+                <button
+                  onClick={() => setShowFullMaze(!showFullMaze)}
+                  className="px-6 py-2 rounded-lg text-lg font-bold mb-4"
+                  style={{
+                    background: '#FFA500',
+                    border: '3px solid #FFD700',
+                    boxShadow: '0 3px 0 #CC8400'
+                  }}
+                >
+                  {showFullMaze ? '視界に戻る' : '迷路全体を見る'}
+                </button>
+                <br/>
+                <button
+                  onClick={startGame}
+                  className="px-8 py-3 rounded-lg text-xl font-bold"
+                  style={{
+                    background: '#32CD32',
+                    border: '4px solid #FFD700',
+                    boxShadow: '0 4px 0 #228B22'
+                  }}
+                >
+                  もう一度プレイ (Enter)
+                </button>
+              </div>
+            </div>
+          </div>
+          {showFullMaze && (
+            <div className="mt-4 p-4 bg-gray-900 rounded border-4 border-yellow-600" style={{maxWidth: '90vw', maxHeight: '70vh', overflow: 'auto'}}>
+              <canvas
+                ref={(canvas) => {
+                  if (!canvas || !maze.length) return;
+                  const ctx = canvas.getContext('2d');
+                  const miniCellSize = 8;
+                  ctx.clearRect(0, 0, canvas.width, canvas.height);
+                  
+                  for (let y = 0; y < MAZE_SIZE; y++) {
+                    for (let x = 0; x < MAZE_SIZE; x++) {
+                      const screenX = x * miniCellSize;
+                      const screenY = y * miniCellSize;
+                      
+                      if (maze[y][x] === 1) {
+                        ctx.fillStyle = '#444';
+                      } else if (brokenWalls.has(`${x},${y}`)) {
+                        ctx.fillStyle = '#5a3a1f';
+                      } else {
+                        ctx.fillStyle = '#8B5A2B';
+                      }
+                      ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
+                      
+                      // Goals
+                      if ((x === 1 && y === 1) || (x === 41 && y === 41)) {
+                        ctx.fillStyle = x === 1 ? 'rgba(220, 20, 60, 0.7)' : 'rgba(65, 105, 225, 0.7)';
+                        ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
+                      }
+                    }
+                  }
+                  
+                  // Player paths
+                  footprints1.forEach(fp => {
+                    const [x, y] = fp.split(',').map(Number);
+                    ctx.fillStyle = 'rgba(255, 80, 80, 0.5)';
+                    ctx.fillRect(x * miniCellSize, y * miniCellSize, miniCellSize, miniCellSize);
+                  });
+                  footprints2.forEach(fp => {
+                    const [x, y] = fp.split(',').map(Number);
+                    ctx.fillStyle = 'rgba(80, 80, 255, 0.5)';
+                    ctx.fillRect(x * miniCellSize, y * miniCellSize, miniCellSize, miniCellSize);
+                  });
+                  
+                  // Final positions
+                  ctx.fillStyle = '#DC143C';
+                  ctx.beginPath();
+                  ctx.arc(player1.x * miniCellSize + miniCellSize/2, player1.y * miniCellSize + miniCellSize/2, miniCellSize/2, 0, Math.PI * 2);
+                  ctx.fill();
+                  
+                  ctx.fillStyle = '#4169E1';
+                  ctx.beginPath();
+                  ctx.arc(player2.x * miniCellSize + miniCellSize/2, player2.y * miniCellSize + miniCellSize/2, miniCellSize/2, 0, Math.PI * 2);
+                  ctx.fill();
+                }}
+                width={MAZE_SIZE * 8}
+                height={MAZE_SIZE * 8}
+                className="border-2 border-gray-600"
+              />
+            </div>
+          )}
         </div>
       )}
     </div>
