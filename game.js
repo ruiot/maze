@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.5.0: Add 3-player mode with yellow player and mode selection screen
-// Commit: v0.5.0: Add 3-player mode with yellow player and mode selection screen
+// v0.6.0: Color collection system, improved controls, keyboard debug display
+// Commit: v0.6.0: Color collection system, improved controls, keyboard debug
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('mode_select');
@@ -14,6 +14,9 @@ const MazeBattleGame = () => {
   const [direction1, setDirection1] = useState({ dx: 1, dy: 0 });
   const [direction2, setDirection2] = useState({ dx: -1, dy: 0 });
   const [direction3, setDirection3] = useState({ dx: 1, dy: 0 });
+  const [collectedColors1, setCollectedColors1] = useState(new Set());
+  const [collectedColors2, setCollectedColors2] = useState(new Set());
+  const [collectedColors3, setCollectedColors3] = useState(new Set());
   const [footprintPath1, setFootprintPath1] = useState([]);
   const [footprintPath2, setFootprintPath2] = useState([]);
   const [footprintPath3, setFootprintPath3] = useState([]);
@@ -23,28 +26,35 @@ const MazeBattleGame = () => {
   const [brokenWalls, setBrokenWalls] = useState(new Set());
   const [particles, setParticles] = useState([]);
   const [winner, setWinner] = useState(null);
-  const [touchStart1, setTouchStart1] = useState(null);
-  const [touchStart2, setTouchStart2] = useState(null);
   const [gamepadDebug, setGamepadDebug] = useState('');
+  const [keyboardDebug, setKeyboardDebug] = useState('');
   const [pressedKeys, setPressedKeys] = useState(new Set());
   const [cellSize, setCellSize] = useState(18);
   const [showFullMaze, setShowFullMaze] = useState(false);
   const [touchHolding, setTouchHolding] = useState({ p1: null, p2: null, p3: null });
+  const [inputCooldown, setInputCooldown] = useState(false);
   
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const lastMoveRef = useRef({ p1: 0, p2: 0, p3: 0 });
   const audioContextRef = useRef(null);
   const touchIntervalRef = useRef({ p1: null, p2: null, p3: null });
+  const lastKeyEventRef = useRef('');
 
   const MAZE_SIZE = 43;
   const VISIBILITY = 5;
   const MOVE_DELAY = 120;
 
+  const startPositions = [
+    { x: 1, y: 1 },      // Player 1
+    { x: 41, y: 41 },    // Player 2
+    { x: 1, y: 41 }      // Player 3
+  ];
+
   // Dynamic cell size calculation
   useEffect(() => {
     const updateCellSize = () => {
-      const availableHeight = window.innerHeight - 250;
+      const availableHeight = window.innerHeight - 300;
       const availableWidth = window.innerWidth - 100;
       const viewSize = (VISIBILITY * 2 + 1);
       const maxCellSizeByHeight = Math.floor(availableHeight / viewSize);
@@ -127,6 +137,9 @@ const MazeBattleGame = () => {
     setDirection1({ dx: 1, dy: 0 });
     setDirection2({ dx: -1, dy: 0 });
     setDirection3({ dx: 1, dy: 0 });
+    setCollectedColors1(new Set());
+    setCollectedColors2(new Set());
+    setCollectedColors3(new Set());
     setFootprintPath1([{ x: 1, y: 1 }]);
     setFootprintPath2([{ x: 41, y: 41 }]);
     setFootprintPath3([{ x: 1, y: 41 }]);
@@ -137,11 +150,38 @@ const MazeBattleGame = () => {
     setParticles([]);
     setWinner(null);
     setShowFullMaze(false);
+    setPressedKeys(new Set());
+    setInputCooldown(false);
     setGameState('playing');
     lastMoveRef.current = { p1: Date.now(), p2: Date.now(), p3: Date.now() };
   };
 
-  const movePlayer = (player, setPlayer, dx, dy, playerNum, setDirection) => {
+  const checkColorCollection = (player, playerNum, setCollectedColors) => {
+    for (let i = 0; i < playerCount; i++) {
+      if (i === playerNum - 1) continue;
+      
+      const startPos = startPositions[i];
+      if (player.x === startPos.x && player.y === startPos.y) {
+        setCollectedColors(prev => new Set([...prev, i + 1]));
+      }
+    }
+  };
+
+  const checkWinCondition = (player, playerNum, collectedColors) => {
+    const requiredColors = [];
+    for (let i = 1; i <= playerCount; i++) {
+      if (i !== playerNum) requiredColors.push(i);
+    }
+    
+    const hasAllColors = requiredColors.every(color => collectedColors.has(color));
+    
+    const homePos = startPositions[playerNum - 1];
+    const isAtHome = player.x === homePos.x && player.y === homePos.y;
+    
+    return hasAllColors && isAtHome;
+  };
+
+  const movePlayer = (player, setPlayer, dx, dy, playerNum, setDirection, collectedColors, setCollectedColors) => {
     const now = Date.now();
     const lastMove = playerNum === 1 ? lastMoveRef.current.p1 : playerNum === 2 ? lastMoveRef.current.p2 : lastMoveRef.current.p3;
     if (now - lastMove < MOVE_DELAY) return;
@@ -152,25 +192,32 @@ const MazeBattleGame = () => {
     const newY = player.y + dy;
 
     if (newX >= 0 && newX < MAZE_SIZE && newY >= 0 && newY < MAZE_SIZE && maze[newY][newX] === 0) {
-      const goalX = playerNum === 1 ? 41 : playerNum === 2 ? 1 : 41;
-      const goalY = playerNum === 1 ? 41 : playerNum === 2 ? 1 : 1;
-
       setPlayer({ x: newX, y: newY });
 
       if (playerNum === 1) {
         setFootprintPath1(prev => [...prev, { x: newX, y: newY }]);
         lastMoveRef.current.p1 = now;
+        checkColorCollection({ x: newX, y: newY }, 1, setCollectedColors1);
+        if (checkWinCondition({ x: newX, y: newY }, 1, collectedColors)) {
+          setWinner(1);
+          setGameState('finished');
+        }
       } else if (playerNum === 2) {
         setFootprintPath2(prev => [...prev, { x: newX, y: newY }]);
         lastMoveRef.current.p2 = now;
+        checkColorCollection({ x: newX, y: newY }, 2, setCollectedColors2);
+        if (checkWinCondition({ x: newX, y: newY }, 2, collectedColors)) {
+          setWinner(2);
+          setGameState('finished');
+        }
       } else {
         setFootprintPath3(prev => [...prev, { x: newX, y: newY }]);
         lastMoveRef.current.p3 = now;
-      }
-
-      if (newX === goalX && newY === goalY) {
-        setWinner(playerNum);
-        setGameState('finished');
+        checkColorCollection({ x: newX, y: newY }, 3, setCollectedColors3);
+        if (checkWinCondition({ x: newX, y: newY }, 3, collectedColors)) {
+          setWinner(3);
+          setGameState('finished');
+        }
       }
     }
   };
@@ -239,21 +286,41 @@ const MazeBattleGame = () => {
         debugInfo.push(gpInfo);
       }
       
-      if (gameState === 'mode_select' && gamepads[0]) {
-        const gp = gamepads[0];
-        const threshold = 0.5;
-        
-        // Lever up/down or ABXY for selection
-        const axes01 = [gp.axes[0] || 0, gp.axes[1] || 0];
-        if (axes01[1] < -threshold || gp.buttons[2]?.pressed) { // Up or X
-          setSelectedMode(2);
-        } else if (axes01[1] > threshold || gp.buttons[1]?.pressed) { // Down or B
-          setSelectedMode(3);
+      if (gameState === 'mode_select' && !inputCooldown) {
+        if (gamepads[0]) {
+          const gp = gamepads[0];
+          const threshold = 0.5;
+          
+          const axes01 = [gp.axes[0] || 0, gp.axes[1] || 0];
+          if (axes01[1] < -threshold || gp.buttons[2]?.pressed || gp.buttons[12]?.pressed) {
+            setSelectedMode(2);
+          } else if (axes01[1] > threshold || gp.buttons[1]?.pressed || gp.buttons[13]?.pressed) {
+            setSelectedMode(3);
+          }
+          
+          if (gp.buttons[9]?.pressed || gp.buttons[8]?.pressed) {
+            startGame(selectedMode);
+            setInputCooldown(true);
+            setTimeout(() => setInputCooldown(false), 500);
+          }
         }
         
-        // + or - button for start
-        if (gp.buttons[9]?.pressed || gp.buttons[8]?.pressed) { // + or -
-          startGame(selectedMode);
+        if (gamepads[1]) {
+          const gp = gamepads[1];
+          const threshold = 0.5;
+          
+          const axes23 = [gp.axes[2] || 0, gp.axes[3] || 0];
+          if (axes23[1] < -threshold || gp.buttons[2]?.pressed || gp.buttons[12]?.pressed) {
+            setSelectedMode(2);
+          } else if (axes23[1] > threshold || gp.buttons[1]?.pressed || gp.buttons[13]?.pressed) {
+            setSelectedMode(3);
+          }
+          
+          if (gp.buttons[9]?.pressed || gp.buttons[8]?.pressed) {
+            startGame(selectedMode);
+            setInputCooldown(true);
+            setTimeout(() => setInputCooldown(false), 500);
+          }
         }
       }
       
@@ -262,35 +329,43 @@ const MazeBattleGame = () => {
           const gp = gamepads[0];
           const threshold = 0.5;
           
-          // Player 1: Joy-Con(L)
           const axes01 = [gp.axes[0] || 0, gp.axes[1] || 0];
           if (Math.abs(axes01[0]) > threshold || Math.abs(axes01[1]) > threshold) {
             const dx = Math.abs(axes01[0]) > Math.abs(axes01[1]) ? (axes01[0] > 0 ? 1 : -1) : 0;
             const dy = Math.abs(axes01[1]) > Math.abs(axes01[0]) ? (axes01[1] > 0 ? 1 : -1) : 0;
-            movePlayer(player1, setPlayer1, dx, dy, 1, setDirection1);
+            movePlayer(player1, setPlayer1, dx, dy, 1, setDirection1, collectedColors1, setCollectedColors1);
           }
           
-          if (gp.buttons[12]?.pressed) movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1);
-          if (gp.buttons[13]?.pressed) movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1);
-          if (gp.buttons[14]?.pressed) movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1);
-          if (gp.buttons[15]?.pressed) movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1);
+          if (gp.buttons[12]?.pressed) movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1, collectedColors1, setCollectedColors1);
+          if (gp.buttons[13]?.pressed) movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1, collectedColors1, setCollectedColors1);
+          if (gp.buttons[14]?.pressed) movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1, collectedColors1, setCollectedColors1);
+          if (gp.buttons[15]?.pressed) movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1, collectedColors1, setCollectedColors1);
           
           if (gp.buttons[4]?.pressed) breakWall(player1, direction1, 1);
+        }
+
+        if (gamepads[1]) {
+          const gp = gamepads[1];
+          const threshold = 0.5;
           
-          // Player 2: Joy-Con(R)
           if (gp.axes.length > 3) {
             const axes23 = [gp.axes[2] || 0, gp.axes[3] || 0];
             if (Math.abs(axes23[0]) > threshold || Math.abs(axes23[1]) > threshold) {
               const dx = Math.abs(axes23[0]) > Math.abs(axes23[1]) ? (axes23[0] > 0 ? 1 : -1) : 0;
               const dy = Math.abs(axes23[1]) > Math.abs(axes23[0]) ? (axes23[1] > 0 ? 1 : -1) : 0;
-              movePlayer(player2, setPlayer2, dx, dy, 2, setDirection2);
+              movePlayer(player2, setPlayer2, dx, dy, 2, setDirection2, collectedColors2, setCollectedColors2);
             }
           }
           
-          if (gp.buttons[0]?.pressed) movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2);
-          if (gp.buttons[1]?.pressed) movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2);
-          if (gp.buttons[2]?.pressed) movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2);
-          if (gp.buttons[3]?.pressed) movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2);
+          if (gp.buttons[0]?.pressed) movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2, collectedColors2, setCollectedColors2);
+          if (gp.buttons[1]?.pressed) movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2, collectedColors2, setCollectedColors2);
+          if (gp.buttons[2]?.pressed) movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2, collectedColors2, setCollectedColors2);
+          if (gp.buttons[3]?.pressed) movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2, collectedColors2, setCollectedColors2);
+          
+          if (gp.buttons[12]?.pressed) movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2, collectedColors2, setCollectedColors2);
+          if (gp.buttons[13]?.pressed) movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2, collectedColors2, setCollectedColors2);
+          if (gp.buttons[14]?.pressed) movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2, collectedColors2, setCollectedColors2);
+          if (gp.buttons[15]?.pressed) movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2, collectedColors2, setCollectedColors2);
           
           if (gp.buttons[5]?.pressed) breakWall(player2, direction2, 2);
         }
@@ -305,22 +380,33 @@ const MazeBattleGame = () => {
 
     animationRef.current = requestAnimationFrame(checkGamepad);
     return () => cancelAnimationFrame(animationRef.current);
-  }, [gameState, selectedMode, player1, player2, player3, maze, direction1, direction2, direction3, cellSize]);
+  }, [gameState, selectedMode, inputCooldown, player1, player2, player3, maze, direction1, direction2, direction3, collectedColors1, collectedColors2, collectedColors3, cellSize, playerCount]);
 
-  // Keyboard input - mode selection and game control
+  // Keyboard input - mode selection
   useEffect(() => {
     if (gameState === 'mode_select') {
       const handleModeKey = (e) => {
+        if (inputCooldown) return;
+        
         if (e.key === '2') {
           startGame(2);
+          setInputCooldown(true);
+          setTimeout(() => setInputCooldown(false), 500);
         } else if (e.key === '3') {
           startGame(3);
+          setInputCooldown(true);
+          setTimeout(() => setInputCooldown(false), 500);
         } else if (e.key === 'ArrowUp') {
           setSelectedMode(2);
+          e.preventDefault();
         } else if (e.key === 'ArrowDown') {
           setSelectedMode(3);
+          e.preventDefault();
         } else if (e.key === 'Enter') {
           startGame(selectedMode);
+          setInputCooldown(true);
+          setTimeout(() => setInputCooldown(false), 500);
+          e.preventDefault();
         }
       };
       window.addEventListener('keydown', handleModeKey);
@@ -329,30 +415,52 @@ const MazeBattleGame = () => {
 
     if (gameState === 'finished') {
       const handleFinishKey = (e) => {
+        if (inputCooldown) return;
+        
         if (e.key === 'Enter') {
-          setGameState('mode_select');
+          setInputCooldown(true);
+          setTimeout(() => {
+            setGameState('mode_select');
+            setInputCooldown(false);
+          }, 300);
+          e.preventDefault();
         }
       };
       window.addEventListener('keydown', handleFinishKey);
       return () => window.removeEventListener('keydown', handleFinishKey);
     }
+  }, [gameState, selectedMode, inputCooldown]);
 
+  // Keyboard input - game play
+  useEffect(() => {
     if (gameState !== 'playing') return;
 
     const handleKeyDown = (e) => {
+      const prevented = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Shift', 'e', 'E', 'u', 'U'].includes(e.key);
+      
+      lastKeyEventRef.current = `${e.key}${prevented ? '(prevented)' : ''}`;
+      
       setPressedKeys(prev => new Set([...prev, e.key]));
       
       if (e.key === 'Shift' || e.key === 'e' || e.key === 'E') {
         breakWall(player1, direction1, 1);
         e.preventDefault();
+        e.stopPropagation();
       }
       if (e.key === 'u' || e.key === 'U') {
         breakWall(player2, direction2, 2);
         e.preventDefault();
+        e.stopPropagation();
       }
       if (e.key === ' ') {
         breakWall(player3, direction3, 3);
         e.preventDefault();
+        e.stopPropagation();
+      }
+      
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
       }
     };
 
@@ -362,6 +470,11 @@ const MazeBattleGame = () => {
         newSet.delete(e.key);
         return newSet;
       });
+      
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown, true);
@@ -371,7 +484,7 @@ const MazeBattleGame = () => {
       window.removeEventListener('keydown', handleKeyDown, true);
       window.removeEventListener('keyup', handleKeyUp, true);
     };
-  }, [gameState, selectedMode, player1, player2, player3, maze, direction1, direction2, direction3]);
+  }, [gameState, player1, player2, player3, maze, direction1, direction2, direction3]);
 
   // Continuous key movement
   useEffect(() => {
@@ -379,25 +492,34 @@ const MazeBattleGame = () => {
 
     const interval = setInterval(() => {
       pressedKeys.forEach(key => {
-        if (key === 'w' || key === 'W') movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1);
-        if (key === 's' || key === 'S') movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1);
-        if (key === 'a' || key === 'A') movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1);
-        if (key === 'd' || key === 'D') movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1);
+        if (key === 'w' || key === 'W') movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1, collectedColors1, setCollectedColors1);
+        if (key === 's' || key === 'S') movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1, collectedColors1, setCollectedColors1);
+        if (key === 'a' || key === 'A') movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1, collectedColors1, setCollectedColors1);
+        if (key === 'd' || key === 'D') movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1, collectedColors1, setCollectedColors1);
         
-        if (key === 'i' || key === 'I') movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2);
-        if (key === 'k' || key === 'K') movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2);
-        if (key === 'j' || key === 'J') movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2);
-        if (key === 'l' || key === 'L') movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2);
+        if (key === 'i' || key === 'I') movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2, collectedColors2, setCollectedColors2);
+        if (key === 'k' || key === 'K') movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2, collectedColors2, setCollectedColors2);
+        if (key === 'j' || key === 'J') movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2, collectedColors2, setCollectedColors2);
+        if (key === 'l' || key === 'L') movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2, collectedColors2, setCollectedColors2);
         
-        if (key === 'ArrowUp') movePlayer(player3, setPlayer3, 0, -1, 3, setDirection3);
-        if (key === 'ArrowDown') movePlayer(player3, setPlayer3, 0, 1, 3, setDirection3);
-        if (key === 'ArrowLeft') movePlayer(player3, setPlayer3, -1, 0, 3, setDirection3);
-        if (key === 'ArrowRight') movePlayer(player3, setPlayer3, 1, 0, 3, setDirection3);
+        if (key === 'ArrowUp') movePlayer(player3, setPlayer3, 0, -1, 3, setDirection3, collectedColors3, setCollectedColors3);
+        if (key === 'ArrowDown') movePlayer(player3, setPlayer3, 0, 1, 3, setDirection3, collectedColors3, setCollectedColors3);
+        if (key === 'ArrowLeft') movePlayer(player3, setPlayer3, -1, 0, 3, setDirection3, collectedColors3, setCollectedColors3);
+        if (key === 'ArrowRight') movePlayer(player3, setPlayer3, 1, 0, 3, setDirection3, collectedColors3, setCollectedColors3);
       });
     }, MOVE_DELAY);
 
     return () => clearInterval(interval);
-  }, [gameState, pressedKeys, player1, player2, player3, maze, direction1, direction2, direction3]);
+  }, [gameState, pressedKeys, player1, player2, player3, maze, direction1, direction2, direction3, collectedColors1, collectedColors2, collectedColors3]);
+
+  // Update keyboard debug display
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+    
+    const keysArray = Array.from(pressedKeys);
+    const debugText = `Keys: [${keysArray.join(', ')}] | Last: ${lastKeyEventRef.current}`;
+    setKeyboardDebug(debugText);
+  }, [pressedKeys, gameState]);
 
   // Particle update
   useEffect(() => {
@@ -430,9 +552,6 @@ const MazeBattleGame = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const drawPlayerView = (player, otherPlayers, otherDirections, footprintPaths, offsetX, playerNum, direction) => {
-      const goalX = playerNum === 1 ? 41 : playerNum === 2 ? 1 : 41;
-      const goalY = playerNum === 1 ? 41 : playerNum === 2 ? 1 : 1;
-
       for (let dy = -VISIBILITY; dy <= VISIBILITY; dy++) {
         for (let dx = -VISIBILITY; dx <= VISIBILITY; dx++) {
           const x = player.x + dx;
@@ -487,10 +606,14 @@ const MazeBattleGame = () => {
               }
             }
 
-            if (x === goalX && y === goalY) {
-              const color = playerNum === 1 ? 'rgba(220, 20, 60, 0.5)' : playerNum === 2 ? 'rgba(65, 105, 225, 0.5)' : 'rgba(255, 215, 0, 0.5)';
-              ctx.fillStyle = color;
-              ctx.fillRect(screenX + 2, screenY + 2, cellSize - 4, cellSize - 4);
+            // Draw start positions with player colors
+            for (let i = 0; i < playerCount; i++) {
+              const startPos = startPositions[i];
+              if (x === startPos.x && y === startPos.y) {
+                const colors = ['rgba(220, 20, 60, 0.6)', 'rgba(65, 105, 225, 0.6)', 'rgba(255, 215, 0, 0.6)'];
+                ctx.fillStyle = colors[i];
+                ctx.fillRect(screenX + 2, screenY + 2, cellSize - 4, cellSize - 4);
+              }
             }
           }
         }
@@ -680,11 +803,11 @@ const MazeBattleGame = () => {
 
   const handleDPad = (dx, dy, playerNum) => {
     if (playerNum === 1) {
-      movePlayer(player1, setPlayer1, dx, dy, 1, setDirection1);
+      movePlayer(player1, setPlayer1, dx, dy, 1, setDirection1, collectedColors1, setCollectedColors1);
     } else if (playerNum === 2) {
-      movePlayer(player2, setPlayer2, dx, dy, 2, setDirection2);
+      movePlayer(player2, setPlayer2, dx, dy, 2, setDirection2, collectedColors2, setCollectedColors2);
     } else {
-      movePlayer(player3, setPlayer3, dx, dy, 3, setDirection3);
+      movePlayer(player3, setPlayer3, dx, dy, 3, setDirection3, collectedColors3, setCollectedColors3);
     }
   };
 
@@ -735,7 +858,7 @@ const MazeBattleGame = () => {
   const canvasWidth = viewWidth * playerCount + margin * (playerCount - 1);
   const canvasHeight = (VISIBILITY * 2 + 1) * cellSize;
 
-  const DPadButton = ({ direction, onClick, onStart, onEnd, style }) => (
+  const DPadButton = ({ direction, onStart, onEnd }) => (
     <button
       onTouchStart={(e) => { e.preventDefault(); onStart(); }}
       onTouchEnd={(e) => { e.preventDefault(); onEnd(); }}
@@ -743,7 +866,12 @@ const MazeBattleGame = () => {
       onMouseUp={(e) => { e.preventDefault(); onEnd(); }}
       onMouseLeave={(e) => { e.preventDefault(); onEnd(); }}
       className="w-12 h-12 bg-gray-700 active:bg-gray-500 rounded flex items-center justify-center text-white font-bold select-none"
-      style={style}
+      style={{ position: 'absolute', ...(
+        direction === 'up' ? { top: 0, left: '50%', transform: 'translateX(-50%)' } :
+        direction === 'down' ? { bottom: 0, left: '50%', transform: 'translateX(-50%)' } :
+        direction === 'left' ? { top: '50%', left: 0, transform: 'translateY(-50%)' } :
+        { top: '50%', right: 0, transform: 'translateY(-50%)' }
+      )}}
     >
       {direction === 'up' && '▲'}
       {direction === 'down' && '▼'}
@@ -752,49 +880,57 @@ const MazeBattleGame = () => {
     </button>
   );
 
-  const ControlPanel = ({ playerNum, wallBreaks, color }) => (
-    <div className="flex flex-col items-center gap-2">
-      <div className="relative w-40 h-40">
-        <DPadButton 
-          direction="up" 
-          onStart={() => handleDPadStart(0, -1, playerNum)}
-          onEnd={() => handleDPadEnd(playerNum)}
-          style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }} 
-        />
-        <DPadButton 
-          direction="down" 
-          onStart={() => handleDPadStart(0, 1, playerNum)}
-          onEnd={() => handleDPadEnd(playerNum)}
-          style={{ position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)' }} 
-        />
-        <DPadButton 
-          direction="left" 
-          onStart={() => handleDPadStart(-1, 0, playerNum)}
-          onEnd={() => handleDPadEnd(playerNum)}
-          style={{ position: 'absolute', top: '50%', left: 0, transform: 'translateY(-50%)' }} 
-        />
-        <DPadButton 
-          direction="right" 
-          onStart={() => handleDPadStart(1, 0, playerNum)}
-          onEnd={() => handleDPadEnd(playerNum)}
-          style={{ position: 'absolute', top: '50%', right: 0, transform: 'translateY(-50%)' }} 
-        />
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-gray-800 rounded"></div>
+  const ControlPanel = ({ playerNum, wallBreaks, collectedColors }) => {
+    const playerEmojis = ['🔴', '🔵', '🟡'];
+    const allColors = [1, 2, 3].filter(c => c !== playerNum).slice(0, playerCount - 1);
+    
+    return (
+      <div className="flex flex-col items-center gap-2">
+        <div className="text-sm font-bold mb-1">
+          {allColors.map(colorNum => (
+            <span key={colorNum} style={{ opacity: collectedColors.has(colorNum) ? 1 : 0.3 }}>
+              {playerEmojis[colorNum - 1]}
+            </span>
+          ))}
+        </div>
+        <div className="relative w-40 h-40">
+          <DPadButton 
+            direction="up" 
+            onStart={() => handleDPadStart(0, -1, playerNum)}
+            onEnd={() => handleDPadEnd(playerNum)}
+          />
+          <DPadButton 
+            direction="down" 
+            onStart={() => handleDPadStart(0, 1, playerNum)}
+            onEnd={() => handleDPadEnd(playerNum)}
+          />
+          <DPadButton 
+            direction="left" 
+            onStart={() => handleDPadStart(-1, 0, playerNum)}
+            onEnd={() => handleDPadEnd(playerNum)}
+          />
+          <DPadButton 
+            direction="right" 
+            onStart={() => handleDPadStart(1, 0, playerNum)}
+            onEnd={() => handleDPadEnd(playerNum)}
+          />
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-gray-800 rounded"></div>
+        </div>
+        <div className="flex gap-1">
+          {[...Array(wallBreaks)].map((_, i) => (
+            <button
+              key={i}
+              onTouchStart={(e) => { e.preventDefault(); handleBreakButton(playerNum); }}
+              onClick={() => handleBreakButton(playerNum)}
+              className="text-2xl active:scale-90 transition-transform select-none"
+            >
+              🧨
+            </button>
+          ))}
+        </div>
       </div>
-      <div className="flex gap-1">
-        {[...Array(wallBreaks)].map((_, i) => (
-          <button
-            key={i}
-            onTouchStart={(e) => { e.preventDefault(); handleBreakButton(playerNum); }}
-            onClick={() => handleBreakButton(playerNum)}
-            className="text-2xl active:scale-90 transition-transform select-none"
-          >
-            🧨
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+    );
+  };
 
   const Modal = ({ children }) => (
     <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
@@ -815,16 +951,16 @@ const MazeBattleGame = () => {
           <h1 className="text-5xl font-bold mb-6" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
             迷路バトル
           </h1>
-          <div className="text-xs mb-6 text-gray-400">v0.5.0</div>
+          <div className="text-xs mb-6 text-gray-400">v0.6.0</div>
           <div className="mb-6 space-y-4">
             <button
-              onClick={() => startGame(2)}
+              onClick={() => { if (!inputCooldown) { startGame(2); setInputCooldown(true); setTimeout(() => setInputCooldown(false), 500); }}}
               onMouseEnter={() => setSelectedMode(2)}
               className={`px-12 py-4 rounded-lg text-2xl font-bold transition-all ${
                 selectedMode === 2 ? 'scale-110' : 'scale-100'
               }`}
               style={{
-                background: selectedMode === 2 ? '#1E90FF' : '#666',
+                background: selectedMode === 2 ? '#4169E1' : '#666',
                 border: '4px solid ' + (selectedMode === 2 ? '#FFD700' : '#888'),
                 boxShadow: selectedMode === 2 ? '0 4px 0 #8B4513' : '0 2px 0 #444'
               }}
@@ -833,13 +969,13 @@ const MazeBattleGame = () => {
             </button>
             <br/>
             <button
-              onClick={() => startGame(3)}
+              onClick={() => { if (!inputCooldown) { startGame(3); setInputCooldown(true); setTimeout(() => setInputCooldown(false), 500); }}}
               onMouseEnter={() => setSelectedMode(3)}
               className={`px-12 py-4 rounded-lg text-2xl font-bold transition-all ${
                 selectedMode === 3 ? 'scale-110' : 'scale-100'
               }`}
               style={{
-                background: selectedMode === 3 ? '#1E90FF' : '#666',
+                background: selectedMode === 3 ? '#FFD700' : '#666',
                 border: '4px solid ' + (selectedMode === 3 ? '#FFD700' : '#888'),
                 boxShadow: selectedMode === 3 ? '0 4px 0 #8B4513' : '0 2px 0 #444'
               }}
@@ -847,9 +983,12 @@ const MazeBattleGame = () => {
               3人プレイ (3)
             </button>
           </div>
-          <div className="text-sm text-gray-400 mb-4">
-            <p>キーボード: 2 または 3 / 矢印キー + Enter</p>
-            <p>Joy-Con: レバー/ABXY + ＋/－ボタン</p>
+          <div className="text-sm text-gray-400 mb-4 space-y-2">
+            <p><strong>新ルール：色集めバトル！</strong></p>
+            <p>他プレイヤーの陣地を訪問して色を集めよう</p>
+            <p>全色集めて自陣に戻れば勝利！</p>
+            <p className="mt-4">キーボード: 2 または 3 / 矢印キー + Enter</p>
+            <p>Joy-Con: レバー/十字/ABXY + ＋/－ボタン</p>
           </div>
           {gamepadDebug && (
             <div className="mt-4 p-3 bg-gray-900 rounded border border-gray-700 text-xs text-white font-mono max-w-2xl mx-auto">
@@ -862,7 +1001,7 @@ const MazeBattleGame = () => {
 
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
-          <div className="text-xs mb-2 text-gray-400">v0.5.0</div>
+          <div className="text-xs mb-2 text-gray-400">v0.6.0</div>
           <canvas
             ref={canvasRef}
             width={canvasWidth}
@@ -870,16 +1009,21 @@ const MazeBattleGame = () => {
             className="rounded"
           />
           <div className="flex gap-8 mt-4 w-full justify-center">
-            <ControlPanel playerNum={1} wallBreaks={wallBreaks1} color="#DC143C" />
-            <ControlPanel playerNum={2} wallBreaks={wallBreaks2} color="#4169E1" />
-            {playerCount === 3 && <ControlPanel playerNum={3} wallBreaks={wallBreaks3} color="#FFD700" />}
+            <ControlPanel playerNum={1} wallBreaks={wallBreaks1} collectedColors={collectedColors1} />
+            <ControlPanel playerNum={2} wallBreaks={wallBreaks2} collectedColors={collectedColors2} />
+            {playerCount === 3 && <ControlPanel playerNum={3} wallBreaks={wallBreaks3} collectedColors={collectedColors3} />}
           </div>
           <div className="mt-4 text-center text-xs space-y-1 w-full max-w-4xl">
             <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / Joy-Con(L) | 破壊: Shift/E/Lボタン</p>
             <p style={{color: '#6B9BFF'}}>🔵 P2: IJKL / Joy-Con(R) | 破壊: U/Rボタン</p>
             {playerCount === 3 && <p style={{color: '#FFD700'}}>🟡 P3: 矢印キー | 破壊: Space</p>}
+            {keyboardDebug && (
+              <div className="mt-2 p-2 bg-gray-900 rounded border border-gray-700 text-xs text-green-400 font-mono">
+                {keyboardDebug}
+              </div>
+            )}
             {gamepadDebug && (
-              <div className="mt-3 p-3 bg-gray-900 rounded border border-gray-700 text-xs text-white font-mono">
+              <div className="mt-2 p-3 bg-gray-900 rounded border border-gray-700 text-xs text-white font-mono">
                 <div style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}}>{gamepadDebug}</div>
               </div>
             )}
@@ -916,7 +1060,15 @@ const MazeBattleGame = () => {
               </button>
               <br/>
               <button
-                onClick={() => setGameState('mode_select')}
+                onClick={() => { 
+                  if (!inputCooldown) {
+                    setInputCooldown(true);
+                    setTimeout(() => {
+                      setGameState('mode_select');
+                      setInputCooldown(false);
+                    }, 300);
+                  }
+                }}
                 className="px-8 py-3 rounded-lg text-xl font-bold"
                 style={{
                   background: '#32CD32',
@@ -956,10 +1108,13 @@ const MazeBattleGame = () => {
                           ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
                           
                           // Start positions
-                          if ((x === 1 && y === 1) || (x === 41 && y === 41) || (playerCount === 3 && x === 1 && y === 41)) {
-                            const color = (x === 1 && y === 1) ? 'rgba(220, 20, 60, 0.7)' : (x === 41 && y === 41) ? 'rgba(65, 105, 225, 0.7)' : 'rgba(255, 215, 0, 0.7)';
-                            ctx.fillStyle = color;
-                            ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
+                          for (let i = 0; i < playerCount; i++) {
+                            const startPos = startPositions[i];
+                            if (x === startPos.x && y === startPos.y) {
+                              const colors = ['rgba(220, 20, 60, 0.7)', 'rgba(65, 105, 225, 0.7)', 'rgba(255, 215, 0, 0.7)'];
+                              ctx.fillStyle = colors[i];
+                              ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
+                            }
                           }
                         }
                       }
