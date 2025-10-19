@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.4.4: Add continuous footprint trails with Bezier curves, clarify button labels, remove canvas border
-// Commit: v0.4.4: Add continuous footprint trails with Bezier curves, clarify button labels, remove canvas border
+// v0.4.5: Change key mappings, prepare retire feature
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -24,6 +23,7 @@ const MazeBattleGame = () => {
   const [cellSize, setCellSize] = useState(18);
   const [showFullMaze, setShowFullMaze] = useState(false);
   const [touchHolding, setTouchHolding] = useState({ p1: null, p2: null });
+  const [debugMessages, setDebugMessages] = useState([]);
   
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
@@ -34,6 +34,14 @@ const MazeBattleGame = () => {
   const MAZE_SIZE = 43;
   const VISIBILITY = 5;
   const MOVE_DELAY = 120;
+
+  // Debug log function
+  const addDebugLog = (message) => {
+    setDebugMessages(prev => {
+      const newMessages = [...prev, `${new Date().toLocaleTimeString()}: ${message}`];
+      return newMessages.slice(-5); // Keep last 5 messages
+    });
+  };
 
   // Dynamic cell size calculation
   useEffect(() => {
@@ -127,6 +135,7 @@ const MazeBattleGame = () => {
     setParticles([]);
     setWinner(null);
     setShowFullMaze(false);
+    setDebugMessages([]);
     setGameState('playing');
     lastMoveRef.current = { p1: Date.now(), p2: Date.now() };
   };
@@ -201,6 +210,10 @@ const MazeBattleGame = () => {
     }
   };
 
+  const handleRetire = () => {
+    addDebugLog('Retire button pressed (not implemented yet)');
+  };
+
   // Gamepad input - unified Joy-Con handling
   useEffect(() => {
     const checkGamepad = () => {
@@ -266,6 +279,9 @@ const MazeBattleGame = () => {
           
           // Player 2: R button for break
           if (gp.buttons[5]?.pressed) breakWall(player2, direction2, 2);
+          
+          // Retire: Minus button (button 8)
+          if (gp.buttons[8]?.pressed) handleRetire();
         }
       }
 
@@ -295,15 +311,26 @@ const MazeBattleGame = () => {
     if (gameState !== 'playing') return;
 
     const handleKeyDown = (e) => {
+      // Prevent browser default behavior
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Escape'].includes(e.key)) {
+        e.preventDefault();
+      }
+
       setPressedKeys(prev => new Set([...prev, e.key]));
       
       // Immediate break action
-      if (e.key === 'Shift' || e.key === 'e' || e.key === 'E') {
+      if (e.key === 'e' || e.key === 'E') {
         breakWall(player1, direction1, 1);
         e.preventDefault();
       }
-      if (e.key === 'u' || e.key === 'U' || e.key === ' ') {
+      if (e.key === 'u' || e.key === 'U' || e.key === 'Shift') {
         breakWall(player2, direction2, 2);
+        e.preventDefault();
+      }
+
+      // Retire
+      if (e.key === 'Escape') {
+        handleRetire();
         e.preventDefault();
       }
     };
@@ -746,9 +773,10 @@ const MazeBattleGame = () => {
               <li>🔴 Player 1: 左上スタート → 右下ゴールで勝利</li>
               <li>🔵 Player 2: 右下スタート → 左上ゴールで勝利</li>
               <li>📱 タッチ: 画面の十字ボタン / 爆弾タップで破壊</li>
-              <li>⌨️ キーボード: WASD / 矢印キー or IJKL (押しっぱなしOK)</li>
+              <li>⌨️ キーボード: WASD / 矢印キーorIJKL (押しっぱなしOK)</li>
               <li>🎮 Joy-Con(L+R): レバー、ボタン全対応</li>
-              <li>💣 破壊: P1はShift/E/Lボタン / P2はU/Space/Rボタン (各3回)</li>
+              <li>💣 破壊: P1はE/Lボタン / P2はU/Shift/Rボタン (各3回)</li>
+              <li>🚪 リタイア: Escキー / Joy-Conマイナスボタン</li>
               <li>👣 足跡が相手に見える!</li>
               <li>👀 視界内なら相手も見える!</li>
             </ul>
@@ -775,7 +803,7 @@ const MazeBattleGame = () => {
 
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
-          <div className="text-xs mb-2 text-gray-400">v0.4.4</div>
+          <div className="text-xs mb-2 text-gray-400">v0.4.5</div>
           <canvas
             ref={canvasRef}
             width={canvasWidth}
@@ -787,8 +815,17 @@ const MazeBattleGame = () => {
             <ControlPanel playerNum={2} wallBreaks={wallBreaks2} color="#4169E1" />
           </div>
           <div className="mt-4 text-center text-xs space-y-1 w-full max-w-4xl">
-            <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / Joy-Con(L) | 破壊: Shift/E/Lボタン</p>
-            <p style={{color: '#6B9BFF'}}>🔵 P2: 矢印/IJKL / Joy-Con(R) | 破壊: U/Space/Rボタン</p>
+            <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / Joy-Con(L) | 破壊: E/Lボタン</p>
+            <p style={{color: '#6B9BFF'}}>🔵 P2: 矢印/IJKL / Joy-Con(R) | 破壊: U/Shift/Rボタン</p>
+            <p style={{color: '#888'}}>🚪 リタイア: Escキー / マイナスボタン</p>
+            {debugMessages.length > 0 && (
+              <div className="mt-3 p-2 bg-gray-900 rounded border border-gray-700 text-xs text-yellow-400 font-mono text-left">
+                <div className="mb-1">デバッグ:</div>
+                {debugMessages.map((msg, i) => (
+                  <div key={i}>{msg}</div>
+                ))}
+              </div>
+            )}
             {gamepadDebug && (
               <div className="mt-3 p-3 bg-gray-900 rounded border border-gray-700 text-xs text-white font-mono">
                 <div style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}}>{gamepadDebug}</div>
