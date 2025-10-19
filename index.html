@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>迷路バトル</title>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { margin: 0; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    // Preprocess game.js: convert import/export to React globals
+    (async () => {
+      const response = await fetch(`game.js?t=${Date.now()}`);
+      let code = await response.text();
+      
+      // Convert import statement to const destructuring
+      code = code.replace(
+        /import React, { useState, useEffect, useRef } from 'react';/,
+        'const { useState, useEffect, useRef } = React;'
+      );
+      
+      // Convert export statement to ReactDOM.render
+      code = code.replace(
+        /export default MazeBattleGame;/,
+        "ReactDOM.render(React.createElement(MazeBattleGame), document.getElementById('root'));"
+      );
+      
+      // Inject converted code
+      const script = document.createElement('script');
+      script.type = 'text/babel';
+      script.textContent = code;
+      document.body.appendChild(script);
+      
+      // Trigger Babel transformation
+      Babel.transformScriptTags();
+    })();
+  </script>
+</body>
+</html>
