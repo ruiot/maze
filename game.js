@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.4.3: Improve visuals and controls - opponent direction, footprint style, modal dialogs, Joy-Con debug, touch repeat
-// Commit: v0.4.3: Improve visuals and controls - opponent direction, footprint style, modal dialogs, Joy-Con debug, touch repeat
+// v0.4.4: Add continuous footprint trails with Bezier curves, clarify button labels, remove canvas border
+// Commit: v0.4.4: Add continuous footprint trails with Bezier curves, clarify button labels, remove canvas border
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -10,8 +10,8 @@ const MazeBattleGame = () => {
   const [player2, setPlayer2] = useState({ x: 41, y: 41 });
   const [direction1, setDirection1] = useState({ dx: 1, dy: 0 });
   const [direction2, setDirection2] = useState({ dx: -1, dy: 0 });
-  const [footprints1, setFootprints1] = useState(new Set());
-  const [footprints2, setFootprints2] = useState(new Set());
+  const [footprintPath1, setFootprintPath1] = useState([]);
+  const [footprintPath2, setFootprintPath2] = useState([]);
   const [wallBreaks1, setWallBreaks1] = useState(3);
   const [wallBreaks2, setWallBreaks2] = useState(3);
   const [brokenWalls, setBrokenWalls] = useState(new Set());
@@ -119,8 +119,8 @@ const MazeBattleGame = () => {
     setPlayer2({ x: 41, y: 41 });
     setDirection1({ dx: 1, dy: 0 });
     setDirection2({ dx: -1, dy: 0 });
-    setFootprints1(new Set(['1,1']));
-    setFootprints2(new Set(['41,41']));
+    setFootprintPath1([{ x: 1, y: 1 }]);
+    setFootprintPath2([{ x: 41, y: 41 }]);
     setWallBreaks1(3);
     setWallBreaks2(3);
     setBrokenWalls(new Set());
@@ -149,10 +149,10 @@ const MazeBattleGame = () => {
       setPlayer({ x: newX, y: newY });
 
       if (playerNum === 1) {
-        setFootprints1(prev => new Set([...prev, `${newX},${newY}`]));
+        setFootprintPath1(prev => [...prev, { x: newX, y: newY }]);
         lastMoveRef.current.p1 = now;
       } else {
-        setFootprints2(prev => new Set([...prev, `${newX},${newY}`]));
+        setFootprintPath2(prev => [...prev, { x: newX, y: newY }]);
         lastMoveRef.current.p2 = now;
       }
 
@@ -376,8 +376,8 @@ const MazeBattleGame = () => {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const drawPlayerView = (player, otherPlayer, otherDirection, footprints, offsetX, playerNum, direction) => {
-      const otherFootprints = playerNum === 1 ? footprints2 : footprints1;
+    const drawPlayerView = (player, otherPlayer, otherDirection, footprintPath, offsetX, playerNum, direction) => {
+      const otherFootprintPath = playerNum === 1 ? footprintPath2 : footprintPath1;
       const goalX = playerNum === 1 ? 41 : 1;
       const goalY = playerNum === 1 ? 41 : 1;
 
@@ -441,47 +441,63 @@ const MazeBattleGame = () => {
               ctx.fillStyle = playerNum === 1 ? 'rgba(220, 20, 60, 0.5)' : 'rgba(65, 105, 225, 0.5)';
               ctx.fillRect(screenX + 2, screenY + 2, cellSize - 4, cellSize - 4);
             }
-
-            // Wavy footprints
-            if (footprints.has(`${x},${y}`)) {
-              ctx.fillStyle = playerNum === 1 ? 'rgba(255, 80, 80, 0.4)' : 'rgba(80, 80, 255, 0.4)';
-              ctx.beginPath();
-              const centerX = screenX + cellSize / 2;
-              const centerY = screenY + cellSize / 2;
-              const radius = cellSize / 2 - 2;
-              for (let i = 0; i <= 16; i++) {
-                const angle = (i / 16) * Math.PI * 2;
-                const wave = Math.sin(angle * 3) * 2;
-                const r = radius + wave;
-                const px = centerX + Math.cos(angle) * r;
-                const py = centerY + Math.sin(angle) * r;
-                if (i === 0) ctx.moveTo(px, py);
-                else ctx.lineTo(px, py);
-              }
-              ctx.closePath();
-              ctx.fill();
-            }
-            if (otherFootprints.has(`${x},${y}`)) {
-              ctx.fillStyle = playerNum === 1 ? 'rgba(80, 80, 255, 0.4)' : 'rgba(255, 80, 80, 0.4)';
-              ctx.beginPath();
-              const centerX = screenX + cellSize / 2;
-              const centerY = screenY + cellSize / 2;
-              const radius = cellSize / 2 - 2;
-              for (let i = 0; i <= 16; i++) {
-                const angle = (i / 16) * Math.PI * 2;
-                const wave = Math.sin(angle * 3) * 2;
-                const r = radius + wave;
-                const px = centerX + Math.cos(angle) * r;
-                const py = centerY + Math.sin(angle) * r;
-                if (i === 0) ctx.moveTo(px, py);
-                else ctx.lineTo(px, py);
-              }
-              ctx.closePath();
-              ctx.fill();
-            }
           }
         }
       }
+
+      // Draw footprint trails with Bezier curves
+      const drawFootprintTrail = (path, colorBase) => {
+        if (path.length < 2) return;
+        
+        for (let i = 0; i < path.length - 1; i++) {
+          const p0 = path[i];
+          const p1 = path[i + 1];
+          
+          // Check if both points are in visibility range
+          const dx0 = p0.x - player.x;
+          const dy0 = p0.y - player.y;
+          const dx1 = p1.x - player.x;
+          const dy1 = p1.y - player.y;
+          
+          if (Math.abs(dx0) <= VISIBILITY && Math.abs(dy0) <= VISIBILITY &&
+              Math.abs(dx1) <= VISIBILITY && Math.abs(dy1) <= VISIBILITY) {
+            
+            const screenX0 = offsetX + (dx0 + VISIBILITY) * cellSize + cellSize / 2;
+            const screenY0 = (dy0 + VISIBILITY) * cellSize + cellSize / 2;
+            const screenX1 = offsetX + (dx1 + VISIBILITY) * cellSize + cellSize / 2;
+            const screenY1 = (dy1 + VISIBILITY) * cellSize + cellSize / 2;
+            
+            // Calculate alpha (older = more transparent)
+            const alpha = 0.2 + (i / path.length) * 0.5;
+            
+            // Calculate wavy width
+            const baseWidth = 4;
+            const wavyWidth = baseWidth + Math.sin(i * 0.3) * 1.5;
+            
+            // Control point for quadratic curve (midpoint with slight offset)
+            const cpX = (screenX0 + screenX1) / 2 + Math.sin(i * 0.5) * 2;
+            const cpY = (screenY0 + screenY1) / 2 + Math.cos(i * 0.5) * 2;
+            
+            ctx.strokeStyle = colorBase.replace('ALPHA', alpha.toFixed(2));
+            ctx.lineWidth = wavyWidth;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            ctx.beginPath();
+            ctx.moveTo(screenX0, screenY0);
+            ctx.quadraticCurveTo(cpX, cpY, screenX1, screenY1);
+            ctx.stroke();
+          }
+        }
+      };
+
+      // Draw own footprints
+      const ownColor = playerNum === 1 ? 'rgba(255, 80, 80, ALPHA)' : 'rgba(80, 80, 255, ALPHA)';
+      drawFootprintTrail(footprintPath, ownColor);
+      
+      // Draw other player's footprints
+      const otherColor = playerNum === 1 ? 'rgba(80, 80, 255, ALPHA)' : 'rgba(255, 80, 80, ALPHA)';
+      drawFootprintTrail(otherFootprintPath, otherColor);
 
       // Other player with direction
       const otherDx = otherPlayer.x - player.x;
@@ -577,8 +593,8 @@ const MazeBattleGame = () => {
     };
 
     const viewWidth = (VISIBILITY * 2 + 1) * cellSize;
-    drawPlayerView(player1, player2, direction2, footprints1, 0, 1, direction1);
-    drawPlayerView(player2, player1, direction1, footprints2, viewWidth + 30, 2, direction2);
+    drawPlayerView(player1, player2, direction2, footprintPath1, 0, 1, direction1);
+    drawPlayerView(player2, player1, direction1, footprintPath2, viewWidth + 30, 2, direction2);
 
     // Particles
     particles.forEach(p => {
@@ -596,7 +612,7 @@ const MazeBattleGame = () => {
         ctx.fill();
       }
     });
-  }, [gameState, player1, player2, direction1, direction2, footprints1, footprints2, maze, particles, brokenWalls, cellSize]);
+  }, [gameState, player1, player2, direction1, direction2, footprintPath1, footprintPath2, maze, particles, brokenWalls, cellSize]);
 
   const handleDPad = (dx, dy, playerNum) => {
     if (playerNum === 1) {
@@ -732,7 +748,7 @@ const MazeBattleGame = () => {
               <li>📱 タッチ: 画面の十字ボタン / 爆弾タップで破壊</li>
               <li>⌨️ キーボード: WASD / 矢印キー or IJKL (押しっぱなしOK)</li>
               <li>🎮 Joy-Con(L+R): レバー、ボタン全対応</li>
-              <li>💣 破壊: P1はShift/E/L / P2はU/Space/R (各3回)</li>
+              <li>💣 破壊: P1はShift/E/Lボタン / P2はU/Space/Rボタン (各3回)</li>
               <li>👣 足跡が相手に見える!</li>
               <li>👀 視界内なら相手も見える!</li>
             </ul>
@@ -759,21 +775,20 @@ const MazeBattleGame = () => {
 
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
-          <div className="text-xs mb-2 text-gray-400">v0.4.3</div>
+          <div className="text-xs mb-2 text-gray-400">v0.4.4</div>
           <canvas
             ref={canvasRef}
             width={canvasWidth}
             height={canvasHeight}
             className="rounded"
-            style={{border: '6px solid #8B4513', boxShadow: '0 0 20px rgba(255, 215, 0, 0.3)'}}
           />
           <div className="flex gap-8 mt-4 w-full justify-center">
             <ControlPanel playerNum={1} wallBreaks={wallBreaks1} color="#DC143C" />
             <ControlPanel playerNum={2} wallBreaks={wallBreaks2} color="#4169E1" />
           </div>
           <div className="mt-4 text-center text-xs space-y-1 w-full max-w-4xl">
-            <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / Joy-Con(L) | 破壊: Shift/E/L</p>
-            <p style={{color: '#6B9BFF'}}>🔵 P2: 矢印/IJKL / Joy-Con(R) | 破壊: U/Space/R</p>
+            <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / Joy-Con(L) | 破壊: Shift/E/Lボタン</p>
+            <p style={{color: '#6B9BFF'}}>🔵 P2: 矢印/IJKL / Joy-Con(R) | 破壊: U/Space/Rボタン</p>
             {gamepadDebug && (
               <div className="mt-3 p-3 bg-gray-900 rounded border border-gray-700 text-xs text-white font-mono">
                 <div style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}}>{gamepadDebug}</div>
@@ -790,7 +805,6 @@ const MazeBattleGame = () => {
             width={canvasWidth}
             height={canvasHeight}
             className="rounded opacity-50"
-            style={{border: '6px solid #8B4513'}}
           />
           <Modal>
             <div className="text-center p-8">
@@ -844,18 +858,14 @@ const MazeBattleGame = () => {
                           const screenY = y * miniCellSize;
                           
                           if (maze[y][x] === 1) {
-                            // Normal wall
                             ctx.fillStyle = '#5a5a5a';
                           } else if (brokenWalls.has(`${x},${y}`)) {
-                            // Broken wall (darker floor)
                             ctx.fillStyle = '#4a3019';
                           } else {
-                            // Normal floor
                             ctx.fillStyle = '#8B5A2B';
                           }
                           ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
                           
-                          // Goals
                           if ((x === 1 && y === 1) || (x === 41 && y === 41)) {
                             ctx.fillStyle = x === 1 ? 'rgba(220, 20, 60, 0.7)' : 'rgba(65, 105, 225, 0.7)';
                             ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
@@ -863,19 +873,24 @@ const MazeBattleGame = () => {
                         }
                       }
                       
-                      // Player paths
-                      footprints1.forEach(fp => {
-                        const [x, y] = fp.split(',').map(Number);
-                        ctx.fillStyle = 'rgba(255, 80, 80, 0.5)';
-                        ctx.fillRect(x * miniCellSize, y * miniCellSize, miniCellSize, miniCellSize);
-                      });
-                      footprints2.forEach(fp => {
-                        const [x, y] = fp.split(',').map(Number);
-                        ctx.fillStyle = 'rgba(80, 80, 255, 0.5)';
-                        ctx.fillRect(x * miniCellSize, y * miniCellSize, miniCellSize, miniCellSize);
-                      });
+                      // Player paths (continuous trails)
+                      const drawMiniTrail = (path, color) => {
+                        if (path.length < 2) return;
+                        ctx.strokeStyle = color;
+                        ctx.lineWidth = 2;
+                        ctx.lineCap = 'round';
+                        ctx.lineJoin = 'round';
+                        ctx.beginPath();
+                        ctx.moveTo(path[0].x * miniCellSize + miniCellSize/2, path[0].y * miniCellSize + miniCellSize/2);
+                        for (let i = 1; i < path.length; i++) {
+                          ctx.lineTo(path[i].x * miniCellSize + miniCellSize/2, path[i].y * miniCellSize + miniCellSize/2);
+                        }
+                        ctx.stroke();
+                      };
                       
-                      // Final positions
+                      drawMiniTrail(footprintPath1, 'rgba(255, 80, 80, 0.7)');
+                      drawMiniTrail(footprintPath2, 'rgba(80, 80, 255, 0.7)');
+                      
                       ctx.fillStyle = '#DC143C';
                       ctx.beginPath();
                       ctx.arc(player1.x * miniCellSize + miniCellSize/2, player1.y * miniCellSize + miniCellSize/2, miniCellSize/2, 0, Math.PI * 2);
