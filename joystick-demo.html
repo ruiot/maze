@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ジョイスティックデモ</title>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    // v0.3.0: Standalone HTML version for testing touch events
+    // Commit: Create standalone HTML version to test outside Claude app
+
+    const { useState, useRef, useEffect } = React;
+
+    const JoystickDemo = () => {
+      const [touchHolding, setTouchHolding] = useState({ p1: null, p2: null });
+      const [debugInfo, setDebugInfo] = useState({ p1: '', p2: '' });
+      const [rawTouchData, setRawTouchData] = useState({ p1: [], p2: [] });
+
+      const Joystick = ({ playerNum, radius = 60, color }) => {
+        const [touchPos, setTouchPos] = useState(null);
+        const touchAreaRef = useRef(null);
+        const touchLogRef = useRef([]);
+
+        const addTouchLog = (event, data) => {
+          const timestamp = new Date().toLocaleTimeString() + '.' + new Date().getMilliseconds();
+          const logEntry = { timestamp, event, ...data };
+          touchLogRef.current = [logEntry, ...touchLogRef.current].slice(0, 10);
+          setRawTouchData(prev => ({
+            ...prev,
+            [`p${playerNum}`]: touchLogRef.current
+          }));
+        };
+
+        useEffect(() => {
+          const element = touchAreaRef.current;
+          if (!element) return;
+
+          const handleTouchStart = (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            
+            addTouchLog('touchstart', {
+              touches: e.touches.length,
+              clientX: touch?.clientX.toFixed(0),
+              clientY: touch?.clientY.toFixed(0),
+              identifier: touch?.identifier
+            });
+
+            if (!touch) return;
+            const rect = element.getBoundingClientRect();
+            updateJoystick(touch, rect);
+          };
+
+          const handleTouchMove = (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            
+            addTouchLog('touchmove', {
+              touches: e.touches.length,
+              clientX: touch?.clientX.toFixed(0),
+              clientY: touch?.clientY.toFixed(0),
+              identifier: touch?.identifier
+            });
+
+            if (!touch) return;
+            const rect = element.getBoundingClientRect();
+            updateJoystick(touch, rect);
+          };
+
+          const updateJoystick = (touch, rect) => {
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            
+            const deltaX = touch.clientX - centerX;
+            const deltaY = touch.clientY - centerY;
+            const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+            
+            const threshold = radius * 0.3;
+            
+            const clampedDistance = Math.min(distance, radius * 0.8);
+            const visualX = distance > 0 ? (deltaX / distance) * clampedDistance : 0;
+            const visualY = distance > 0 ? (deltaY / distance) * clampedDistance : 0;
+            setTouchPos({ x: visualX, y: visualY });
+            
+            if (distance > threshold) {
+              const angle = Math.atan2(deltaY, deltaX);
+              const direction = Math.round(angle / (Math.PI / 2)) * (Math.PI / 2);
+              const dx = Math.round(Math.cos(direction));
+              const dy = Math.round(Math.sin(direction));
+              
+              setTouchHolding(prev => ({ ...prev, [`p${playerNum}`]: { dx, dy } }));
+              
+              const dirText = dx === 0 ? (dy < 0 ? '↑' : '↓') : (dx > 0 ? '→' : '←');
+              setDebugInfo(prev => ({ 
+                ...prev, 
+                [`p${playerNum}`]: `${dirText} (${dx}, ${dy}) dist: ${distance.toFixed(0)}` 
+              }));
+            } else {
+              setTouchHolding(prev => ({ ...prev, [`p${playerNum}`]: null }));
+              setDebugInfo(prev => ({ 
+                ...prev, 
+                [`p${playerNum}`]: `Neutral (${distance.toFixed(0)} < ${threshold.toFixed(0)})` 
+              }));
+            }
+          };
+
+          const handleTouchEnd = (e) => {
+            e.preventDefault();
+            
+            addTouchLog('touchend', {
+              touches: e.touches.length,
+              changedTouches: e.changedTouches.length
+            });
+            
+            resetJoystick();
+          };
+
+          const handleTouchCancel = (e) => {
+            e.preventDefault();
+            
+            addTouchLog('touchcancel', {
+              touches: e.touches.length,
+              changedTouches: e.changedTouches.length
+            });
+            
+            resetJoystick();
+          };
+
+          const resetJoystick = () => {
+            setTouchPos(null);
+            setTouchHolding(prev => ({ ...prev, [`p${playerNum}`]: null }));
+            setDebugInfo(prev => ({ ...prev, [`p${playerNum}`]: 'Released' }));
+          };
+
+          element.addEventListener('touchstart', handleTouchStart, { passive: false });
+          element.addEventListener('touchmove', handleTouchMove, { passive: false });
+          element.addEventListener('touchend', handleTouchEnd, { passive: false });
+          element.addEventListener('touchcancel', handleTouchCancel, { passive: false });
+
+          return () => {
+            element.removeEventListener('touchstart', handleTouchStart);
+            element.removeEventListener('touchmove', handleTouchMove);
+            element.removeEventListener('touchend', handleTouchEnd);
+            element.removeEventListener('touchcancel', handleTouchCancel);
+          };
+        }, [playerNum, radius]);
+
+        return React.createElement('div', { className: 'flex flex-col items-center gap-2' },
+          React.createElement('div', {
+            ref: touchAreaRef,
+            className: 'relative select-none',
+            style: { 
+              width: radius * 2, 
+              height: radius * 2,
+              touchAction: 'none',
+              position: 'relative'
+            }
+          },
+            // Outer circle
+            React.createElement('div', {
+              className: 'absolute inset-0 rounded-full border-4',
+              style: {
+                borderColor: '#555',
+                background: 'radial-gradient(circle, #333 0%, #222 100%)',
+                pointerEvents: 'none'
+              }
+            },
+              React.createElement('div', {
+                className: 'absolute top-1 left-1/2 transform -translate-x-1/2 text-gray-500 text-xs',
+                style: { pointerEvents: 'none' }
+              }, '▲'),
+              React.createElement('div', {
+                className: 'absolute bottom-1 left-1/2 transform -translate-x-1/2 text-gray-500 text-xs',
+                style: { pointerEvents: 'none' }
+              }, '▼'),
+              React.createElement('div', {
+                className: 'absolute left-1 top-1/2 transform -translate-y-1/2 text-gray-500 text-xs',
+                style: { pointerEvents: 'none' }
+              }, '◀'),
+              React.createElement('div', {
+                className: 'absolute right-1 top-1/2 transform -translate-y-1/2 text-gray-500 text-xs',
+                style: { pointerEvents: 'none' }
+              }, '▶'),
+              React.createElement('div', {
+                className: 'absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 rounded-full border border-gray-600',
+                style: {
+                  width: radius * 0.6,
+                  height: radius * 0.6,
+                  opacity: 0.3,
+                  pointerEvents: 'none'
+                }
+              })
+            ),
+            // Center dot
+            React.createElement('div', {
+              className: 'absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 rounded-full',
+              style: {
+                width: 8,
+                height: 8,
+                background: '#666',
+                pointerEvents: 'none'
+              }
+            }),
+            // Knob
+            React.createElement('div', {
+              className: 'absolute rounded-full shadow-lg transition-all',
+              style: {
+                left: '50%',
+                top: '50%',
+                width: radius * 0.5,
+                height: radius * 0.5,
+                background: touchPos ? color : '#555',
+                transform: touchPos 
+                  ? `translate(calc(-50% + ${touchPos.x}px), calc(-50% + ${touchPos.y}px))`
+                  : 'translate(-50%, -50%)',
+                boxShadow: '0 4px 8px rgba(0,0,0,0.5)',
+                opacity: touchPos ? 1 : 0.5,
+                pointerEvents: 'none'
+              }
+            })
+          ),
+          // Direction display
+          React.createElement('div', {
+            className: 'text-2xl font-bold',
+            style: { color }
+          },
+            touchHolding[`p${playerNum}`] ? (
+              (touchHolding[`p${playerNum}`].dy === -1 && '↑') ||
+              (touchHolding[`p${playerNum}`].dy === 1 && '↓') ||
+              (touchHolding[`p${playerNum}`].dx === -1 && '←') ||
+              (touchHolding[`p${playerNum}`].dx === 1 && '→')
+            ) : '○'
+          )
+        );
+      };
+
+      return React.createElement('div', {
+        className: 'flex flex-col items-center justify-center min-h-screen bg-black text-white p-4'
+      },
+        React.createElement('div', { className: 'text-xs mb-4 text-gray-400' }, 'v0.3.0 - Standalone'),
+        React.createElement('h1', {
+          className: 'text-3xl font-bold mb-8',
+          style: { color: '#FFD700' }
+        }, 'ジョイスティックデモ (Standalone)'),
+        
+        React.createElement('div', { className: 'flex gap-12 mb-8' },
+          React.createElement('div', null,
+            React.createElement('h2', {
+              className: 'text-xl mb-4 text-center',
+              style: { color: '#DC143C' }
+            }, '🔴 Player 1'),
+            React.createElement(Joystick, { playerNum: 1, radius: 60, color: '#DC143C' })
+          ),
+          React.createElement('div', null,
+            React.createElement('h2', {
+              className: 'text-xl mb-4 text-center',
+              style: { color: '#4169E1' }
+            }, '🔵 Player 2'),
+            React.createElement(Joystick, { playerNum: 2, radius: 60, color: '#4169E1' })
+          )
+        ),
+        
+        // Debug info
+        React.createElement('div', {
+          className: 'bg-gray-900 p-4 rounded border border-gray-700 max-w-4xl w-full'
+        },
+          React.createElement('div', { className: 'text-sm font-mono space-y-2' },
+            React.createElement('div', null,
+              React.createElement('span', { style: { color: '#DC143C' } }, 'P1 Status:'),
+              ' ', debugInfo.p1 || 'Not touched'
+            ),
+            React.createElement('div', null,
+              React.createElement('span', { style: { color: '#4169E1' } }, 'P2 Status:'),
+              ' ', debugInfo.p2 || 'Not touched'
+            )
+          )
+        ),
+
+        // Raw Touch Event Log
+        React.createElement('div', {
+          className: 'mt-4 grid grid-cols-2 gap-4 w-full max-w-4xl'
+        },
+          React.createElement('div', { className: 'bg-gray-900 p-3 rounded border border-red-900' },
+            React.createElement('h3', {
+              className: 'text-sm font-bold mb-2',
+              style: { color: '#DC143C' }
+            }, 'Player 1 Touch Events (最新10件)'),
+            React.createElement('div', { className: 'text-xs font-mono space-y-1 max-h-64 overflow-y-auto' },
+              rawTouchData.p1.length === 0 
+                ? React.createElement('div', { className: 'text-gray-500' }, 'イベントなし')
+                : rawTouchData.p1.map((log, i) =>
+                    React.createElement('div', { key: i, className: 'border-b border-gray-800 pb-1' },
+                      React.createElement('div', { className: 'text-yellow-400' }, `${log.timestamp} - ${log.event}`),
+                      React.createElement('div', { className: 'text-gray-400 pl-2' },
+                        Object.entries(log)
+                          .filter(([k]) => k !== 'timestamp' && k !== 'event')
+                          .map(([k, v]) => React.createElement('span', { key: k, className: 'mr-2' }, `${k}: ${v}`))
+                      )
+                    )
+                  )
+            )
+          ),
+          React.createElement('div', { className: 'bg-gray-900 p-3 rounded border border-blue-900' },
+            React.createElement('h3', {
+              className: 'text-sm font-bold mb-2',
+              style: { color: '#4169E1' }
+            }, 'Player 2 Touch Events (最新10件)'),
+            React.createElement('div', { className: 'text-xs font-mono space-y-1 max-h-64 overflow-y-auto' },
+              rawTouchData.p2.length === 0 
+                ? React.createElement('div', { className: 'text-gray-500' }, 'イベントなし')
+                : rawTouchData.p2.map((log, i) =>
+                    React.createElement('div', { key: i, className: 'border-b border-gray-800 pb-1' },
+                      React.createElement('div', { className: 'text-yellow-400' }, `${log.timestamp} - ${log.event}`),
+                      React.createElement('div', { className: 'text-gray-400 pl-2' },
+                        Object.entries(log)
+                          .filter(([k]) => k !== 'timestamp' && k !== 'event')
+                          .map(([k, v]) => React.createElement('span', { key: k, className: 'mr-2' }, `${k}: ${v}`))
+                      )
+                    )
+                  )
+            )
+          )
+        ),
+        
+        // Instructions
+        React.createElement('div', {
+          className: 'mt-4 bg-gray-900 p-4 rounded border border-yellow-600 max-w-4xl w-full'
+        },
+          React.createElement('h3', {
+            className: 'text-sm font-bold mb-2',
+            style: { color: '#FFD700' }
+          }, 'テスト環境:'),
+          React.createElement('ul', { className: 'text-xs space-y-1' },
+            React.createElement('li', null, '• Standalone HTML版（iframe制約なし）'),
+            React.createElement('li', null, '• これで動けば、Claudeアプリの制約が原因'),
+            React.createElement('li', null, '• これでも動かなければ、実装の問題'),
+            React.createElement('li', null, '• タッチイベントログを確認してください')
+          )
+        )
+      );
+    };
+
+    ReactDOM.render(React.createElement(JoystickDemo), document.getElementById('root'));
+  </script>
+</body>
+</html>
