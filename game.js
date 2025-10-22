@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.4.7-experimental: Add circular vision mode experiment
-// Commit: v0.4.7-exp: Add circular vision mode with toggle support
+// v0.4.8: Adjust MOVE_DELAY to 180ms, add maze size selection (S/M/L), show version on title
+// Commit: v0.4.8: Adjust MOVE_DELAY to 180ms, add maze size selection (S/M/L: 13/31/43)
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
   const [maze, setMaze] = useState([]);
+  const [mazeSize, setMazeSize] = useState(43); // S=13, M=31, L=43
   const [player1, setPlayer1] = useState({ x: 1, y: 1 });
   const [player2, setPlayer2] = useState({ x: 41, y: 41 });
   const [direction1, setDirection1] = useState({ dx: 1, dy: 0 });
@@ -30,9 +31,14 @@ const MazeBattleGame = () => {
   const lastMoveRef = useRef({ p1: 0, p2: 0 });
   const audioContextRef = useRef(null);
 
-  const MAZE_SIZE = 43;
   const VISIBILITY = 5;
-  const MOVE_DELAY = 120;
+  const MOVE_DELAY = 180; // Adjusted from 120ms to 180ms for better single-tap control
+
+  const MAZE_SIZE_OPTIONS = [
+    { name: '小 (Dev)', size: 13, nodes: 49, time: '~2分' },
+    { name: '中 (Normal)', size: 31, nodes: 225, time: '~7分' },
+    { name: '大 (Challenge)', size: 43, nodes: 441, time: '~12分' }
+  ];
 
   const addDebugLog = (message) => {
     setDebugMessages(prev => {
@@ -78,8 +84,8 @@ const MazeBattleGame = () => {
     oscillator.stop(ctx.currentTime + 0.3);
   };
 
-  const generateMaze = () => {
-    const maze = Array(MAZE_SIZE).fill().map(() => Array(MAZE_SIZE).fill(1));
+  const generateMaze = (size) => {
+    const maze = Array(size).fill().map(() => Array(size).fill(1));
     
     const stack = [];
     const startX = 1;
@@ -96,7 +102,7 @@ const MazeBattleGame = () => {
       for (const [dx, dy] of directions) {
         const nx = x + dx;
         const ny = y + dy;
-        if (nx > 0 && nx < MAZE_SIZE - 1 && ny > 0 && ny < MAZE_SIZE - 1 && maze[ny][nx] === 1) {
+        if (nx > 0 && nx < size - 1 && ny > 0 && ny < size - 1 && maze[ny][nx] === 1) {
           validDirs.push([dx, dy]);
         }
       }
@@ -117,14 +123,15 @@ const MazeBattleGame = () => {
   };
 
   const startGame = () => {
-    const newMaze = generateMaze();
+    const newMaze = generateMaze(mazeSize);
     setMaze(newMaze);
+    const goalPos = mazeSize - 2;
     setPlayer1({ x: 1, y: 1 });
-    setPlayer2({ x: 41, y: 41 });
+    setPlayer2({ x: goalPos, y: goalPos });
     setDirection1({ dx: 1, dy: 0 });
     setDirection2({ dx: -1, dy: 0 });
     setFootprintPath1([{ x: 1, y: 1 }]);
-    setFootprintPath2([{ x: 41, y: 41 }]);
+    setFootprintPath2([{ x: goalPos, y: goalPos }]);
     setWallBreaks1(3);
     setWallBreaks2(3);
     setBrokenWalls(new Set());
@@ -142,9 +149,10 @@ const MazeBattleGame = () => {
     const newX = player.x + dx;
     const newY = player.y + dy;
 
-    if (newX >= 0 && newX < MAZE_SIZE && newY >= 0 && newY < MAZE_SIZE && maze[newY][newX] === 0) {
-      const goalX = playerNum === 1 ? 41 : 1;
-      const goalY = playerNum === 1 ? 41 : 1;
+    if (newX >= 0 && newX < mazeSize && newY >= 0 && newY < mazeSize && maze[newY][newX] === 0) {
+      const goalPos = mazeSize - 2;
+      const goalX = playerNum === 1 ? goalPos : 1;
+      const goalY = playerNum === 1 ? goalPos : 1;
 
       setPlayer({ x: newX, y: newY });
 
@@ -171,7 +179,7 @@ const MazeBattleGame = () => {
     const wallX = player.x + direction.dx;
     const wallY = player.y + direction.dy;
 
-    if (wallX >= 0 && wallX < MAZE_SIZE && wallY >= 0 && wallY < MAZE_SIZE && maze[wallY][wallX] === 1) {
+    if (wallX >= 0 && wallX < mazeSize && wallY >= 0 && wallY < mazeSize && maze[wallY][wallX] === 1) {
       const newMaze = maze.map(row => [...row]);
       newMaze[wallY][wallX] = 0;
       setMaze(newMaze);
@@ -327,7 +335,7 @@ const MazeBattleGame = () => {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [gameState, pressedKeys, touchHolding, player1, player2, maze, direction1, direction2, cellSize]);
+  }, [gameState, pressedKeys, touchHolding, player1, player2, maze, direction1, direction2, cellSize, mazeSize]);
 
   useEffect(() => {
     if (gameState === 'menu' || gameState === 'finished') {
@@ -363,7 +371,6 @@ const MazeBattleGame = () => {
         e.preventDefault();
       }
 
-      // V key: Toggle view mode
       if (e.key === 'v' || e.key === 'V') {
         setViewMode(prev => {
           const newMode = prev === 'square' ? 'circle' : 'square';
@@ -421,10 +428,10 @@ const MazeBattleGame = () => {
 
     const drawPlayerView = (player, otherPlayer, otherDirection, footprintPath, offsetX, playerNum, direction) => {
       const otherFootprintPath = playerNum === 1 ? footprintPath2 : footprintPath1;
-      const goalX = playerNum === 1 ? 41 : 1;
-      const goalY = playerNum === 1 ? 41 : 1;
+      const goalPos = mazeSize - 2;
+      const goalX = playerNum === 1 ? goalPos : 1;
+      const goalY = playerNum === 1 ? goalPos : 1;
 
-      // Apply circular mask if in circle mode
       if (viewMode === 'circle') {
         ctx.save();
         const centerX = offsetX + (VISIBILITY * cellSize) + cellSize / 2;
@@ -444,7 +451,7 @@ const MazeBattleGame = () => {
           const screenX = offsetX + (dx + VISIBILITY) * cellSize;
           const screenY = (dy + VISIBILITY) * cellSize;
 
-          const isOutOfBounds = x < 0 || x >= MAZE_SIZE || y < 0 || y >= MAZE_SIZE;
+          const isOutOfBounds = x < 0 || x >= mazeSize || y < 0 || y >= mazeSize;
           const isWall = isOutOfBounds || maze[y][x] === 1;
           
           if (isWall) {
@@ -632,7 +639,6 @@ const MazeBattleGame = () => {
       ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
       ctx.fillRect(eye2X - eyeSize / 2, eye2Y - eyeSize / 2, eyeSize, eyeSize);
 
-      // Restore context if circular mask was applied
       if (viewMode === 'circle') {
         ctx.restore();
       }
@@ -657,7 +663,7 @@ const MazeBattleGame = () => {
         ctx.fill();
       }
     });
-  }, [gameState, player1, player2, direction1, direction2, footprintPath1, footprintPath2, maze, particles, brokenWalls, cellSize, viewMode]);
+  }, [gameState, player1, player2, direction1, direction2, footprintPath1, footprintPath2, maze, particles, brokenWalls, cellSize, viewMode, mazeSize]);
 
   const handleBreakButton = (playerNum) => {
     if (playerNum === 1) {
@@ -774,10 +780,37 @@ const MazeBattleGame = () => {
     <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
       {gameState === 'menu' && (
         <div className="text-center">
+          <div className="text-xs mb-2 text-gray-400">v0.4.8</div>
           <h1 className="text-5xl font-bold mb-6" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
             迷路バトル
           </h1>
           
+          {/* Maze Size Selection */}
+          <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
+            <h3 className="text-lg font-bold mb-3" style={{color: '#FFD700'}}>迷路サイズ:</h3>
+            <div className="flex flex-col gap-2">
+              {MAZE_SIZE_OPTIONS.map(option => (
+                <button
+                  key={option.size}
+                  onClick={() => setMazeSize(option.size)}
+                  className={`px-4 py-3 rounded-lg font-bold transition-all text-left ${
+                    mazeSize === option.size 
+                      ? 'bg-blue-600 border-2 border-yellow-500 shadow-lg' 
+                      : 'bg-gray-700 border-2 border-gray-600'
+                  }`}
+                >
+                  <div className="flex justify-between items-center">
+                    <span>{option.name}</span>
+                    <span className="text-sm text-gray-300">{option.time}</span>
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">
+                    {option.size}×{option.size} ({option.nodes}ノード)
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* View Mode Selection */}
           <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
             <h3 className="text-lg font-bold mb-2" style={{color: '#FFD700'}}>視界形状:</h3>
@@ -804,15 +837,6 @@ const MazeBattleGame = () => {
               </button>
             </div>
           </div>
-
-          {/* Future: Player Count Selection (placeholder for layout) */}
-          {/* <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
-            <h3 className="text-lg font-bold mb-2" style={{color: '#FFD700'}}>プレイ人数:</h3>
-            <div className="flex gap-3 justify-center">
-              <button className="px-6 py-2 rounded-lg font-bold bg-gray-700 border-2 border-gray-600">2人</button>
-              <button className="px-6 py-2 rounded-lg font-bold bg-gray-700 border-2 border-gray-600">3人</button>
-            </div>
-          </div> */}
           
           <div className="mb-6 text-left bg-gray-900 p-6 rounded-lg max-w-md border-4 border-yellow-600 mx-auto">
             <h2 className="text-xl font-bold mb-3" style={{color: '#FFD700'}}>ルール:</h2>
@@ -846,12 +870,15 @@ const MazeBattleGame = () => {
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.4.7-exp</div>
+            <div className="text-xs text-gray-400">v0.4.8</div>
             <div className="text-xs px-2 py-1 rounded" style={{
               background: viewMode === 'circle' ? '#4169E1' : '#666',
               color: '#FFF'
             }}>
               {viewMode === 'square' ? '□ 四角視界' : '○ 円形視界'}
+            </div>
+            <div className="text-xs text-gray-400">
+              {MAZE_SIZE_OPTIONS.find(opt => opt.size === mazeSize)?.name}
             </div>
           </div>
           <canvas
@@ -934,8 +961,8 @@ const MazeBattleGame = () => {
                       const miniCellSize = 8;
                       ctx.clearRect(0, 0, canvas.width, canvas.height);
                       
-                      for (let y = 0; y < MAZE_SIZE; y++) {
-                        for (let x = 0; x < MAZE_SIZE; x++) {
+                      for (let y = 0; y < mazeSize; y++) {
+                        for (let x = 0; x < mazeSize; x++) {
                           const screenX = x * miniCellSize;
                           const screenY = y * miniCellSize;
                           
@@ -948,7 +975,8 @@ const MazeBattleGame = () => {
                           }
                           ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
                           
-                          if ((x === 1 && y === 1) || (x === 41 && y === 41)) {
+                          const goalPos = mazeSize - 2;
+                          if ((x === 1 && y === 1) || (x === goalPos && y === goalPos)) {
                             ctx.fillStyle = x === 1 ? 'rgba(220, 20, 60, 0.7)' : 'rgba(65, 105, 225, 0.7)';
                             ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
                           }
@@ -982,8 +1010,8 @@ const MazeBattleGame = () => {
                       ctx.arc(player2.x * miniCellSize + miniCellSize/2, player2.y * miniCellSize + miniCellSize/2, miniCellSize/2, 0, Math.PI * 2);
                       ctx.fill();
                     }}
-                    width={MAZE_SIZE * 8}
-                    height={MAZE_SIZE * 8}
+                    width={mazeSize * 8}
+                    height={mazeSize * 8}
                     className="border-2 border-gray-600"
                   />
                 </div>
