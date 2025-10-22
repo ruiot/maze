@@ -8,7 +8,7 @@ const MazeBattleGame = () => {
   const [maze, setMaze] = useState([]);
   const [mazeSize, setMazeSize] = useState(43);
   const [player1, setPlayer1] = useState({ x: 1, y: 1 });
-  const [player2, setPlayer2] = useState({ x: 41, y: 41 });
+  const [player2, setPlayer2] = useState({ x: 1, y: 1 });
   const [direction1, setDirection1] = useState({ dx: 1, dy: 0 });
   const [direction2, setDirection2] = useState({ dx: -1, dy: 0 });
   const [footprintPath1, setFootprintPath1] = useState([]);
