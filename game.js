@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.4.5: Change key mappings, prepare retire feature
+// v0.4.7-experimental: Add circular vision mode experiment
+// Commit: v0.4.7-exp: Add circular vision mode with toggle support
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -16,34 +17,30 @@ const MazeBattleGame = () => {
   const [brokenWalls, setBrokenWalls] = useState(new Set());
   const [particles, setParticles] = useState([]);
   const [winner, setWinner] = useState(null);
-  const [touchStart1, setTouchStart1] = useState(null);
-  const [touchStart2, setTouchStart2] = useState(null);
   const [gamepadDebug, setGamepadDebug] = useState('');
   const [pressedKeys, setPressedKeys] = useState(new Set());
   const [cellSize, setCellSize] = useState(18);
   const [showFullMaze, setShowFullMaze] = useState(false);
   const [touchHolding, setTouchHolding] = useState({ p1: null, p2: null });
   const [debugMessages, setDebugMessages] = useState([]);
+  const [viewMode, setViewMode] = useState('square'); // 'square' or 'circle'
   
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const lastMoveRef = useRef({ p1: 0, p2: 0 });
   const audioContextRef = useRef(null);
-  const touchIntervalRef = useRef({ p1: null, p2: null });
 
   const MAZE_SIZE = 43;
   const VISIBILITY = 5;
   const MOVE_DELAY = 120;
 
-  // Debug log function
   const addDebugLog = (message) => {
     setDebugMessages(prev => {
       const newMessages = [...prev, `${new Date().toLocaleTimeString()}: ${message}`];
-      return newMessages.slice(-5); // Keep last 5 messages
+      return newMessages.slice(-5);
     });
   };
 
-  // Dynamic cell size calculation
   useEffect(() => {
     const updateCellSize = () => {
       const availableHeight = window.innerHeight - 250;
@@ -61,7 +58,6 @@ const MazeBattleGame = () => {
     return () => window.removeEventListener('resize', updateCellSize);
   }, []);
 
-  // Sound effect
   const playBreakSound = () => {
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -141,11 +137,6 @@ const MazeBattleGame = () => {
   };
 
   const movePlayer = (player, setPlayer, dx, dy, playerNum, setDirection) => {
-    const now = Date.now();
-    const lastMove = playerNum === 1 ? lastMoveRef.current.p1 : lastMoveRef.current.p2;
-    if (now - lastMove < MOVE_DELAY) return;
-
-    // Always update direction
     setDirection({ dx, dy });
 
     const newX = player.x + dx;
@@ -157,6 +148,7 @@ const MazeBattleGame = () => {
 
       setPlayer({ x: newX, y: newY });
 
+      const now = Date.now();
       if (playerNum === 1) {
         setFootprintPath1(prev => [...prev, { x: newX, y: newY }]);
         lastMoveRef.current.p1 = now;
@@ -214,12 +206,49 @@ const MazeBattleGame = () => {
     addDebugLog('Retire button pressed (not implemented yet)');
   };
 
-  // Gamepad input - unified Joy-Con handling
   useEffect(() => {
-    const checkGamepad = () => {
+    if (gameState !== 'playing') return;
+
+    const checkAllInputs = () => {
+      const now = Date.now();
       const gamepads = navigator.getGamepads();
       let debugInfo = [];
-      
+
+      pressedKeys.forEach(key => {
+        if ((key === 'w' || key === 'W') && now - lastMoveRef.current.p1 >= MOVE_DELAY) {
+          movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1);
+        }
+        if ((key === 's' || key === 'S') && now - lastMoveRef.current.p1 >= MOVE_DELAY) {
+          movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1);
+        }
+        if ((key === 'a' || key === 'A') && now - lastMoveRef.current.p1 >= MOVE_DELAY) {
+          movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1);
+        }
+        if ((key === 'd' || key === 'D') && now - lastMoveRef.current.p1 >= MOVE_DELAY) {
+          movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1);
+        }
+
+        if ((key === 'ArrowUp' || key === 'i' || key === 'I') && now - lastMoveRef.current.p2 >= MOVE_DELAY) {
+          movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2);
+        }
+        if ((key === 'ArrowDown' || key === 'k' || key === 'K') && now - lastMoveRef.current.p2 >= MOVE_DELAY) {
+          movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2);
+        }
+        if ((key === 'ArrowLeft' || key === 'j' || key === 'J') && now - lastMoveRef.current.p2 >= MOVE_DELAY) {
+          movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2);
+        }
+        if ((key === 'ArrowRight' || key === 'l' || key === 'L') && now - lastMoveRef.current.p2 >= MOVE_DELAY) {
+          movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2);
+        }
+      });
+
+      if (touchHolding.p1 && now - lastMoveRef.current.p1 >= MOVE_DELAY) {
+        movePlayer(player1, setPlayer1, touchHolding.p1.dx, touchHolding.p1.dy, 1, setDirection1);
+      }
+      if (touchHolding.p2 && now - lastMoveRef.current.p2 >= MOVE_DELAY) {
+        movePlayer(player2, setPlayer2, touchHolding.p2.dx, touchHolding.p2.dy, 2, setDirection2);
+      }
+
       for (let gpIndex = 0; gpIndex < 4; gpIndex++) {
         const gp = gamepads[gpIndex];
         if (!gp) continue;
@@ -238,65 +267,68 @@ const MazeBattleGame = () => {
         debugInfo.push(gpInfo);
       }
       
-      if (gameState === 'playing') {
-        // Unified Joy-Con handling (both L and R on gamepads[0])
-        if (gamepads[0]) {
-          const gp = gamepads[0];
-          const threshold = 0.5;
-          
-          // Player 1: Joy-Con(L) - axes[0], axes[1] and L-side buttons
-          const axes01 = [gp.axes[0] || 0, gp.axes[1] || 0];
-          if (Math.abs(axes01[0]) > threshold || Math.abs(axes01[1]) > threshold) {
-            const dx = Math.abs(axes01[0]) > Math.abs(axes01[1]) ? (axes01[0] > 0 ? 1 : -1) : 0;
-            const dy = Math.abs(axes01[1]) > Math.abs(axes01[0]) ? (axes01[1] > 0 ? 1 : -1) : 0;
+      if (gamepads[0]) {
+        const gp = gamepads[0];
+        const threshold = 0.5;
+        
+        const axes01 = [gp.axes[0] || 0, gp.axes[1] || 0];
+        if (Math.abs(axes01[0]) > threshold || Math.abs(axes01[1]) > threshold) {
+          const dx = Math.abs(axes01[0]) > Math.abs(axes01[1]) ? (axes01[0] > 0 ? 1 : -1) : 0;
+          const dy = Math.abs(axes01[1]) > Math.abs(axes01[0]) ? (axes01[1] > 0 ? 1 : -1) : 0;
+          if (now - lastMoveRef.current.p1 >= MOVE_DELAY) {
             movePlayer(player1, setPlayer1, dx, dy, 1, setDirection1);
           }
-          
-          // Player 1: D-pad (buttons 12-15)
-          if (gp.buttons[12]?.pressed) movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1);
-          if (gp.buttons[13]?.pressed) movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1);
-          if (gp.buttons[14]?.pressed) movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1);
-          if (gp.buttons[15]?.pressed) movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1);
-          
-          // Player 1: L button for break
-          if (gp.buttons[4]?.pressed) breakWall(player1, direction1, 1);
-          
-          // Player 2: Joy-Con(R) - axes[2], axes[3] and R-side buttons
-          if (gp.axes.length > 3) {
-            const axes23 = [gp.axes[2] || 0, gp.axes[3] || 0];
-            if (Math.abs(axes23[0]) > threshold || Math.abs(axes23[1]) > threshold) {
-              const dx = Math.abs(axes23[0]) > Math.abs(axes23[1]) ? (axes23[0] > 0 ? 1 : -1) : 0;
-              const dy = Math.abs(axes23[1]) > Math.abs(axes23[0]) ? (axes23[1] > 0 ? 1 : -1) : 0;
+        }
+        
+        if (gp.buttons[12]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
+          movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1);
+        if (gp.buttons[13]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
+          movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1);
+        if (gp.buttons[14]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
+          movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1);
+        if (gp.buttons[15]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
+          movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1);
+
+        if (gp.axes.length > 3) {
+          const axes23 = [gp.axes[2] || 0, gp.axes[3] || 0];
+          if (Math.abs(axes23[0]) > threshold || Math.abs(axes23[1]) > threshold) {
+            const dx = Math.abs(axes23[0]) > Math.abs(axes23[1]) ? (axes23[0] > 0 ? 1 : -1) : 0;
+            const dy = Math.abs(axes23[1]) > Math.abs(axes23[0]) ? (axes23[1] > 0 ? 1 : -1) : 0;
+            if (now - lastMoveRef.current.p2 >= MOVE_DELAY) {
               movePlayer(player2, setPlayer2, dx, dy, 2, setDirection2);
             }
           }
-          
-          // Player 2: XYBA buttons (0-3)
-          if (gp.buttons[0]?.pressed) movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2);  // A
-          if (gp.buttons[1]?.pressed) movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2);  // B
-          if (gp.buttons[2]?.pressed) movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2); // X
-          if (gp.buttons[3]?.pressed) movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2); // Y
-          
-          // Player 2: R button for break
-          if (gp.buttons[5]?.pressed) breakWall(player2, direction2, 2);
-          
-          // Retire: Minus button (button 8)
-          if (gp.buttons[8]?.pressed) handleRetire();
         }
+        
+        if (gp.buttons[0]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
+          movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2);
+        if (gp.buttons[1]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
+          movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2);
+        if (gp.buttons[2]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
+          movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2);
+        if (gp.buttons[3]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
+          movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2);
+
+        if (gp.buttons[4]?.pressed) breakWall(player1, direction1, 1);
+        if (gp.buttons[5]?.pressed) breakWall(player2, direction2, 2);
+        if (gp.buttons[8]?.pressed) handleRetire();
       }
 
       if (debugInfo.length > 0) {
         setGamepadDebug(debugInfo.join('\n'));
       }
 
-      animationRef.current = requestAnimationFrame(checkGamepad);
+      animationRef.current = requestAnimationFrame(checkAllInputs);
     };
 
-    animationRef.current = requestAnimationFrame(checkGamepad);
-    return () => cancelAnimationFrame(animationRef.current);
-  }, [gameState, player1, player2, maze, direction1, direction2, cellSize]);
+    animationRef.current = requestAnimationFrame(checkAllInputs);
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [gameState, pressedKeys, touchHolding, player1, player2, maze, direction1, direction2, cellSize]);
 
-  // Keyboard input with key repeat
   useEffect(() => {
     if (gameState === 'menu' || gameState === 'finished') {
       const handleMenuKey = (e) => {
@@ -311,14 +343,12 @@ const MazeBattleGame = () => {
     if (gameState !== 'playing') return;
 
     const handleKeyDown = (e) => {
-      // Prevent browser default behavior
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Escape'].includes(e.key)) {
         e.preventDefault();
       }
 
       setPressedKeys(prev => new Set([...prev, e.key]));
       
-      // Immediate break action
       if (e.key === 'e' || e.key === 'E') {
         breakWall(player1, direction1, 1);
         e.preventDefault();
@@ -328,9 +358,18 @@ const MazeBattleGame = () => {
         e.preventDefault();
       }
 
-      // Retire
       if (e.key === 'Escape') {
         handleRetire();
+        e.preventDefault();
+      }
+
+      // V key: Toggle view mode
+      if (e.key === 'v' || e.key === 'V') {
+        setViewMode(prev => {
+          const newMode = prev === 'square' ? 'circle' : 'square';
+          addDebugLog(`View mode: ${newMode === 'square' ? '□ Square' : '○ Circle'}`);
+          return newMode;
+        });
         e.preventDefault();
       }
     };
@@ -352,28 +391,6 @@ const MazeBattleGame = () => {
     };
   }, [gameState, player1, player2, maze, direction1, direction2]);
 
-  // Continuous key movement
-  useEffect(() => {
-    if (gameState !== 'playing') return;
-
-    const interval = setInterval(() => {
-      pressedKeys.forEach(key => {
-        if (key === 'w' || key === 'W') movePlayer(player1, setPlayer1, 0, -1, 1, setDirection1);
-        if (key === 's' || key === 'S') movePlayer(player1, setPlayer1, 0, 1, 1, setDirection1);
-        if (key === 'a' || key === 'A') movePlayer(player1, setPlayer1, -1, 0, 1, setDirection1);
-        if (key === 'd' || key === 'D') movePlayer(player1, setPlayer1, 1, 0, 1, setDirection1);
-        
-        if (key === 'ArrowUp' || key === 'i' || key === 'I') movePlayer(player2, setPlayer2, 0, -1, 2, setDirection2);
-        if (key === 'ArrowDown' || key === 'k' || key === 'K') movePlayer(player2, setPlayer2, 0, 1, 2, setDirection2);
-        if (key === 'ArrowLeft' || key === 'j' || key === 'J') movePlayer(player2, setPlayer2, -1, 0, 2, setDirection2);
-        if (key === 'ArrowRight' || key === 'l' || key === 'L') movePlayer(player2, setPlayer2, 1, 0, 2, setDirection2);
-      });
-    }, MOVE_DELAY);
-
-    return () => clearInterval(interval);
-  }, [gameState, pressedKeys, player1, player2, maze, direction1, direction2]);
-
-  // Particle update
   useEffect(() => {
     if (gameState !== 'playing') return;
 
@@ -395,7 +412,6 @@ const MazeBattleGame = () => {
     return () => clearInterval(interval);
   }, [gameState]);
 
-  // Canvas rendering
   useEffect(() => {
     if (gameState !== 'playing' || !canvasRef.current) return;
 
@@ -407,6 +423,18 @@ const MazeBattleGame = () => {
       const otherFootprintPath = playerNum === 1 ? footprintPath2 : footprintPath1;
       const goalX = playerNum === 1 ? 41 : 1;
       const goalY = playerNum === 1 ? 41 : 1;
+
+      // Apply circular mask if in circle mode
+      if (viewMode === 'circle') {
+        ctx.save();
+        const centerX = offsetX + (VISIBILITY * cellSize) + cellSize / 2;
+        const centerY = (VISIBILITY * cellSize) + cellSize / 2;
+        const radius = VISIBILITY * cellSize + cellSize / 2;
+        
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.clip();
+      }
 
       for (let dy = -VISIBILITY; dy <= VISIBILITY; dy++) {
         for (let dx = -VISIBILITY; dx <= VISIBILITY; dx++) {
@@ -440,7 +468,6 @@ const MazeBattleGame = () => {
             ctx.stroke();
             ctx.globalAlpha = 1.0;
           } else {
-            // Floor with darker color for broken walls
             const isBroken = brokenWalls.has(`${x},${y}`);
             const checkerSize = 3;
             for (let cy = 0; cy < cellSize; cy += checkerSize) {
@@ -463,7 +490,6 @@ const MazeBattleGame = () => {
               }
             }
 
-            // Goal floor with player color
             if (x === goalX && y === goalY) {
               ctx.fillStyle = playerNum === 1 ? 'rgba(220, 20, 60, 0.5)' : 'rgba(65, 105, 225, 0.5)';
               ctx.fillRect(screenX + 2, screenY + 2, cellSize - 4, cellSize - 4);
@@ -472,7 +498,6 @@ const MazeBattleGame = () => {
         }
       }
 
-      // Draw footprint trails with Bezier curves
       const drawFootprintTrail = (path, colorBase) => {
         if (path.length < 2) return;
         
@@ -480,7 +505,6 @@ const MazeBattleGame = () => {
           const p0 = path[i];
           const p1 = path[i + 1];
           
-          // Check if both points are in visibility range
           const dx0 = p0.x - player.x;
           const dy0 = p0.y - player.y;
           const dx1 = p1.x - player.x;
@@ -494,14 +518,10 @@ const MazeBattleGame = () => {
             const screenX1 = offsetX + (dx1 + VISIBILITY) * cellSize + cellSize / 2;
             const screenY1 = (dy1 + VISIBILITY) * cellSize + cellSize / 2;
             
-            // Calculate alpha (older = more transparent)
             const alpha = 0.2 + (i / path.length) * 0.5;
-            
-            // Calculate wavy width
             const baseWidth = 4;
             const wavyWidth = baseWidth + Math.sin(i * 0.3) * 1.5;
             
-            // Control point for quadratic curve (midpoint with slight offset)
             const cpX = (screenX0 + screenX1) / 2 + Math.sin(i * 0.5) * 2;
             const cpY = (screenY0 + screenY1) / 2 + Math.cos(i * 0.5) * 2;
             
@@ -518,15 +538,12 @@ const MazeBattleGame = () => {
         }
       };
 
-      // Draw own footprints
       const ownColor = playerNum === 1 ? 'rgba(255, 80, 80, ALPHA)' : 'rgba(80, 80, 255, ALPHA)';
       drawFootprintTrail(footprintPath, ownColor);
       
-      // Draw other player's footprints
       const otherColor = playerNum === 1 ? 'rgba(80, 80, 255, ALPHA)' : 'rgba(255, 80, 80, ALPHA)';
       drawFootprintTrail(otherFootprintPath, otherColor);
 
-      // Other player with direction
       const otherDx = otherPlayer.x - player.x;
       const otherDy = otherPlayer.y - player.y;
       if (Math.abs(otherDx) <= VISIBILITY && Math.abs(otherDy) <= VISIBILITY) {
@@ -538,7 +555,6 @@ const MazeBattleGame = () => {
         ctx.arc(otherScreenX + cellSize / 2, otherScreenY + cellSize / 2 + 2, cellSize / 2.5, 0, Math.PI * 2);
         ctx.fill();
         
-        // Other player's eyes direction
         ctx.fillStyle = '#FFF';
         const eyeSize = 3;
         const eyeOffset = cellSize / 4;
@@ -574,7 +590,6 @@ const MazeBattleGame = () => {
         ctx.fillRect(oeye2X - eyeSize / 2, oeye2Y - eyeSize / 2, eyeSize, eyeSize);
       }
 
-      // Self player
       const playerScreenX = offsetX + VISIBILITY * cellSize;
       const playerScreenY = VISIBILITY * cellSize;
       
@@ -583,7 +598,6 @@ const MazeBattleGame = () => {
       ctx.arc(playerScreenX + cellSize / 2, playerScreenY + cellSize / 2 + 2, cellSize / 2.5, 0, Math.PI * 2);
       ctx.fill();
       
-      // Eyes direction
       ctx.fillStyle = '#FFF';
       const eyeSize = 3;
       const eyeOffset = cellSize / 4;
@@ -617,13 +631,17 @@ const MazeBattleGame = () => {
       
       ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
       ctx.fillRect(eye2X - eyeSize / 2, eye2Y - eyeSize / 2, eyeSize, eyeSize);
+
+      // Restore context if circular mask was applied
+      if (viewMode === 'circle') {
+        ctx.restore();
+      }
     };
 
     const viewWidth = (VISIBILITY * 2 + 1) * cellSize;
     drawPlayerView(player1, player2, direction2, footprintPath1, 0, 1, direction1);
     drawPlayerView(player2, player1, direction1, footprintPath2, viewWidth + 30, 2, direction2);
 
-    // Particles
     particles.forEach(p => {
       const dx = p.x - (p.playerNum === 1 ? player1.x : player2.x);
       const dy = p.y - (p.playerNum === 1 ? player1.y : player2.y);
@@ -639,15 +657,7 @@ const MazeBattleGame = () => {
         ctx.fill();
       }
     });
-  }, [gameState, player1, player2, direction1, direction2, footprintPath1, footprintPath2, maze, particles, brokenWalls, cellSize]);
-
-  const handleDPad = (dx, dy, playerNum) => {
-    if (playerNum === 1) {
-      movePlayer(player1, setPlayer1, dx, dy, 1, setDirection1);
-    } else {
-      movePlayer(player2, setPlayer2, dx, dy, 2, setDirection2);
-    }
-  };
+  }, [gameState, player1, player2, direction1, direction2, footprintPath1, footprintPath2, maze, particles, brokenWalls, cellSize, viewMode]);
 
   const handleBreakButton = (playerNum) => {
     if (playerNum === 1) {
@@ -657,82 +667,82 @@ const MazeBattleGame = () => {
     }
   };
 
-  const handleDPadStart = (dx, dy, playerNum) => {
-    handleDPad(dx, dy, playerNum);
-    
-    const key = playerNum === 1 ? 'p1' : 'p2';
-    if (touchIntervalRef.current[key]) {
-      clearInterval(touchIntervalRef.current[key]);
-    }
-    
-    touchIntervalRef.current[key] = setInterval(() => {
-      handleDPad(dx, dy, playerNum);
-    }, MOVE_DELAY);
-    
-    setTouchHolding(prev => ({ ...prev, [key]: { dx, dy } }));
-  };
-
-  const handleDPadEnd = (playerNum) => {
-    const key = playerNum === 1 ? 'p1' : 'p2';
-    if (touchIntervalRef.current[key]) {
-      clearInterval(touchIntervalRef.current[key]);
-      touchIntervalRef.current[key] = null;
-    }
-    setTouchHolding(prev => ({ ...prev, [key]: null }));
-  };
-
-  useEffect(() => {
-    return () => {
-      if (touchIntervalRef.current.p1) clearInterval(touchIntervalRef.current.p1);
-      if (touchIntervalRef.current.p2) clearInterval(touchIntervalRef.current.p2);
-    };
-  }, []);
-
   const canvasWidth = ((VISIBILITY * 2 + 1) * cellSize) * 2 + 30;
   const canvasHeight = (VISIBILITY * 2 + 1) * cellSize;
 
-  const DPadButton = ({ direction, onClick, onStart, onEnd, style }) => (
-    <button
-      onTouchStart={(e) => { e.preventDefault(); onStart(); }}
-      onTouchEnd={(e) => { e.preventDefault(); onEnd(); }}
-      onMouseDown={(e) => { e.preventDefault(); onStart(); }}
-      onMouseUp={(e) => { e.preventDefault(); onEnd(); }}
-      onMouseLeave={(e) => { e.preventDefault(); onEnd(); }}
-      className="w-12 h-12 bg-gray-700 active:bg-gray-500 rounded flex items-center justify-center text-white font-bold select-none"
-      style={style}
-    >
-      {direction === 'up' && '▲'}
-      {direction === 'down' && '▼'}
-      {direction === 'left' && '◀'}
-      {direction === 'right' && '▶'}
-    </button>
-  );
+  const DPadButton = ({ direction, playerNum, dx, dy, style }) => {
+    const [isPointerDown, setIsPointerDown] = useState(false);
 
-  const ControlPanel = ({ playerNum, wallBreaks, color }) => (
+    const handlePointerDown = (e) => {
+      e.preventDefault();
+      setIsPointerDown(true);
+      e.currentTarget.setPointerCapture(e.pointerId);
+      
+      const key = playerNum === 1 ? 'p1' : 'p2';
+      setTouchHolding(prev => ({ ...prev, [key]: { dx, dy } }));
+    };
+
+    const handlePointerUp = (e) => {
+      e.preventDefault();
+      setIsPointerDown(false);
+      
+      const key = playerNum === 1 ? 'p1' : 'p2';
+      setTouchHolding(prev => ({ ...prev, [key]: null }));
+    };
+
+    const handlePointerCancel = (e) => {
+      e.preventDefault();
+      setIsPointerDown(false);
+      
+      const key = playerNum === 1 ? 'p1' : 'p2';
+      setTouchHolding(prev => ({ ...prev, [key]: null }));
+    };
+
+    return (
+      <button
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        className="w-12 h-12 bg-gray-700 active:bg-gray-500 rounded flex items-center justify-center text-white font-bold select-none"
+        style={{ ...style, touchAction: 'none' }}
+      >
+        {direction === 'up' && '▲'}
+        {direction === 'down' && '▼'}
+        {direction === 'left' && '◀'}
+        {direction === 'right' && '▶'}
+      </button>
+    );
+  };
+
+  const ControlPanel = ({ playerNum, wallBreaks }) => (
     <div className="flex flex-col items-center gap-2">
       <div className="relative w-40 h-40">
         <DPadButton 
           direction="up" 
-          onStart={() => handleDPadStart(0, -1, playerNum)}
-          onEnd={() => handleDPadEnd(playerNum)}
+          playerNum={playerNum}
+          dx={0}
+          dy={-1}
           style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }} 
         />
         <DPadButton 
           direction="down" 
-          onStart={() => handleDPadStart(0, 1, playerNum)}
-          onEnd={() => handleDPadEnd(playerNum)}
+          playerNum={playerNum}
+          dx={0}
+          dy={1}
           style={{ position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)' }} 
         />
         <DPadButton 
           direction="left" 
-          onStart={() => handleDPadStart(-1, 0, playerNum)}
-          onEnd={() => handleDPadEnd(playerNum)}
+          playerNum={playerNum}
+          dx={-1}
+          dy={0}
           style={{ position: 'absolute', top: '50%', left: 0, transform: 'translateY(-50%)' }} 
         />
         <DPadButton 
           direction="right" 
-          onStart={() => handleDPadStart(1, 0, playerNum)}
-          onEnd={() => handleDPadEnd(playerNum)}
+          playerNum={playerNum}
+          dx={1}
+          dy={0}
           style={{ position: 'absolute', top: '50%', right: 0, transform: 'translateY(-50%)' }} 
         />
         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-gray-800 rounded"></div>
@@ -752,7 +762,7 @@ const MazeBattleGame = () => {
     </div>
   );
 
-  const Modal = ({ children, onClose }) => (
+  const Modal = ({ children }) => (
     <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
       <div className="bg-gray-900 rounded-lg border-4 border-yellow-600 max-w-full max-h-full overflow-auto relative">
         {children}
@@ -767,7 +777,44 @@ const MazeBattleGame = () => {
           <h1 className="text-5xl font-bold mb-6" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
             迷路バトル
           </h1>
-          <div className="mb-6 text-left bg-gray-900 p-6 rounded-lg max-w-md border-4 border-yellow-600">
+          
+          {/* View Mode Selection */}
+          <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
+            <h3 className="text-lg font-bold mb-2" style={{color: '#FFD700'}}>視界形状:</h3>
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => setViewMode('square')}
+                className={`px-6 py-2 rounded-lg font-bold transition-all ${
+                  viewMode === 'square' 
+                    ? 'bg-blue-600 border-2 border-yellow-500 shadow-lg' 
+                    : 'bg-gray-700 border-2 border-gray-600'
+                }`}
+              >
+                □ 四角
+              </button>
+              <button
+                onClick={() => setViewMode('circle')}
+                className={`px-6 py-2 rounded-lg font-bold transition-all ${
+                  viewMode === 'circle' 
+                    ? 'bg-blue-600 border-2 border-yellow-500 shadow-lg' 
+                    : 'bg-gray-700 border-2 border-gray-600'
+                }`}
+              >
+                ○ 円形
+              </button>
+            </div>
+          </div>
+
+          {/* Future: Player Count Selection (placeholder for layout) */}
+          {/* <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
+            <h3 className="text-lg font-bold mb-2" style={{color: '#FFD700'}}>プレイ人数:</h3>
+            <div className="flex gap-3 justify-center">
+              <button className="px-6 py-2 rounded-lg font-bold bg-gray-700 border-2 border-gray-600">2人</button>
+              <button className="px-6 py-2 rounded-lg font-bold bg-gray-700 border-2 border-gray-600">3人</button>
+            </div>
+          </div> */}
+          
+          <div className="mb-6 text-left bg-gray-900 p-6 rounded-lg max-w-md border-4 border-yellow-600 mx-auto">
             <h2 className="text-xl font-bold mb-3" style={{color: '#FFD700'}}>ルール:</h2>
             <ul className="space-y-2 text-sm">
               <li>🔴 Player 1: 左上スタート → 右下ゴールで勝利</li>
@@ -777,6 +824,7 @@ const MazeBattleGame = () => {
               <li>🎮 Joy-Con(L+R): レバー、ボタン全対応</li>
               <li>💣 破壊: P1はE/Lボタン / P2はU/Shift/Rボタン (各3回)</li>
               <li>🚪 リタイア: Escキー / Joy-Conマイナスボタン</li>
+              <li>👁️ 視界切替: Vキー (□ ⇔ ○)</li>
               <li>👣 足跡が相手に見える!</li>
               <li>👀 視界内なら相手も見える!</li>
             </ul>
@@ -792,18 +840,20 @@ const MazeBattleGame = () => {
           >
             ゲーム開始 (Enter)
           </button>
-          {gamepadDebug && (
-            <div className="mt-4 p-3 bg-gray-900 rounded border border-gray-700 text-xs text-white font-mono max-w-2xl mx-auto">
-              <div className="text-yellow-500 mb-1">Joy-Con状態:</div>
-              <div style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}}>{gamepadDebug}</div>
-            </div>
-          )}
         </div>
       )}
 
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
-          <div className="text-xs mb-2 text-gray-400">v0.4.5</div>
+          <div className="flex items-center gap-3 mb-2">
+            <div className="text-xs text-gray-400">v0.4.7-exp</div>
+            <div className="text-xs px-2 py-1 rounded" style={{
+              background: viewMode === 'circle' ? '#4169E1' : '#666',
+              color: '#FFF'
+            }}>
+              {viewMode === 'square' ? '□ 四角視界' : '○ 円形視界'}
+            </div>
+          </div>
           <canvas
             ref={canvasRef}
             width={canvasWidth}
@@ -811,24 +861,19 @@ const MazeBattleGame = () => {
             className="rounded"
           />
           <div className="flex gap-8 mt-4 w-full justify-center">
-            <ControlPanel playerNum={1} wallBreaks={wallBreaks1} color="#DC143C" />
-            <ControlPanel playerNum={2} wallBreaks={wallBreaks2} color="#4169E1" />
+            <ControlPanel playerNum={1} wallBreaks={wallBreaks1} />
+            <ControlPanel playerNum={2} wallBreaks={wallBreaks2} />
           </div>
           <div className="mt-4 text-center text-xs space-y-1 w-full max-w-4xl">
             <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / Joy-Con(L) | 破壊: E/Lボタン</p>
             <p style={{color: '#6B9BFF'}}>🔵 P2: 矢印/IJKL / Joy-Con(R) | 破壊: U/Shift/Rボタン</p>
-            <p style={{color: '#888'}}>🚪 リタイア: Escキー / マイナスボタン</p>
+            <p style={{color: '#888'}}>🚪 リタイア: Escキー / マイナスボタン | 👁️ 視界切替: Vキー</p>
             {debugMessages.length > 0 && (
               <div className="mt-3 p-2 bg-gray-900 rounded border border-gray-700 text-xs text-yellow-400 font-mono text-left">
                 <div className="mb-1">デバッグ:</div>
                 {debugMessages.map((msg, i) => (
                   <div key={i}>{msg}</div>
                 ))}
-              </div>
-            )}
-            {gamepadDebug && (
-              <div className="mt-3 p-3 bg-gray-900 rounded border border-gray-700 text-xs text-white font-mono">
-                <div style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}}>{gamepadDebug}</div>
               </div>
             )}
           </div>
@@ -878,7 +923,7 @@ const MazeBattleGame = () => {
           </Modal>
           
           {showFullMaze && (
-            <Modal onClose={() => setShowFullMaze(false)}>
+            <Modal>
               <div className="p-6">
                 <h2 className="text-2xl font-bold mb-4 text-center" style={{color: '#FFD700'}}>迷路全体</h2>
                 <div style={{maxWidth: '90vw', maxHeight: '70vh', overflow: 'auto'}}>
@@ -910,7 +955,6 @@ const MazeBattleGame = () => {
                         }
                       }
                       
-                      // Player paths (continuous trails)
                       const drawMiniTrail = (path, color) => {
                         if (path.length < 2) return;
                         ctx.strokeStyle = color;
