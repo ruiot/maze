@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.5.1: Circular fog masking in overview, player eyes, simplified finish screen, input clearing
-// Commit: v0.5.1: Add circular fog masking, player eyes in overview, simplify finish screen
+// v0.5.4: Fix coordinate reset in startGame, add retire confirmation modal, fix Enter key
+// Commit: v0.5.4: Fix coordinate reset in startGame, add retire confirmation modal, fix Enter key
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
   const [maze, setMaze] = useState([]);
   const [mazeSize, setMazeSize] = useState(43);
   const [player1, setPlayer1] = useState({ x: 1, y: 1 });
-  const [player2, setPlayer2] = useState({ x: 1, y: 1 });
+  const [player2, setPlayer2] = useState({ x: 11, y: 11 });
   const [direction1, setDirection1] = useState({ dx: 1, dy: 0 });
   const [direction2, setDirection2] = useState({ dx: -1, dy: 0 });
   const [footprintPath1, setFootprintPath1] = useState([]);
@@ -24,6 +24,8 @@ const MazeBattleGame = () => {
   const [touchHolding, setTouchHolding] = useState({ p1: null, p2: null });
   const [debugMessages, setDebugMessages] = useState([]);
   const [viewMode, setViewMode] = useState('circle');
+  const [lastViewModeToggle, setLastViewModeToggle] = useState(0);
+  const [showRetireConfirm, setShowRetireConfirm] = useState(false);
   
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
@@ -32,6 +34,7 @@ const MazeBattleGame = () => {
 
   const VISIBILITY = 5;
   const MOVE_DELAY = 180;
+  const VIEW_MODE_TOGGLE_DELAY = 200;
 
   const MAZE_SIZE_OPTIONS = [
     { name: '小 (Dev)', size: 13, nodes: 49, time: '~2分' },
@@ -128,10 +131,15 @@ const MazeBattleGame = () => {
   };
 
   const startGame = () => {
+    // Reset coordinates first to clear any previous game state
+    setPlayer1({ x: 1, y: 1 });
+    setPlayer2({ x: 1, y: 1 });
+    
     const newMaze = generateMaze(mazeSize);
     setMaze(newMaze);
     const goalPos = mazeSize - 2;
-    setPlayer1({ x: 1, y: 1 });
+    
+    // Set correct positions
     setPlayer2({ x: goalPos, y: goalPos });
     setDirection1({ dx: 1, dy: 0 });
     setDirection2({ dx: -1, dy: 0 });
@@ -173,7 +181,6 @@ const MazeBattleGame = () => {
         setWinner(playerNum);
         setGameState('finished');
         
-        // Clear all inputs to prevent carryover
         setPressedKeys(new Set());
         setTouchHolding({ p1: null, p2: null });
       }
@@ -219,10 +226,26 @@ const MazeBattleGame = () => {
   };
 
   const handleRetire = () => {
-    addDebugLog('Retire button pressed (not implemented yet)');
+    setShowRetireConfirm(true);
+  };
+  
+  const confirmRetire = () => {
+    setShowRetireConfirm(false);
+    setPressedKeys(new Set());
+    setTouchHolding({ p1: null, p2: null });
+    setGameState('menu');
+    addDebugLog('Game retired - returning to menu');
+  };
+  
+  const cancelRetire = () => {
+    setShowRetireConfirm(false);
   };
 
   const cycleViewMode = () => {
+    const now = Date.now();
+    if (now - lastViewModeToggle < VIEW_MODE_TOGGLE_DELAY) return;
+    
+    setLastViewModeToggle(now);
     const currentIndex = VIEW_MODES.findIndex(mode => mode.id === viewMode);
     const nextIndex = (currentIndex + 1) % VIEW_MODES.length;
     const newMode = VIEW_MODES[nextIndex].id;
@@ -357,6 +380,7 @@ const MazeBattleGame = () => {
     if (gameState === 'menu' || gameState === 'finished') {
       const handleMenuKey = (e) => {
         if (e.key === 'Enter') {
+          e.preventDefault();
           if (gameState === 'finished') {
             setGameState('menu');
           } else {
@@ -364,8 +388,8 @@ const MazeBattleGame = () => {
           }
         }
       };
-      window.addEventListener('keydown', handleMenuKey);
-      return () => window.removeEventListener('keydown', handleMenuKey);
+      window.addEventListener('keydown', handleMenuKey, true);
+      return () => window.removeEventListener('keydown', handleMenuKey, true);
     }
 
     if (gameState !== 'playing') return;
@@ -443,21 +467,17 @@ const MazeBattleGame = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (viewMode === 'overview') {
-      // Overview mode: draw full maze with circular fog of war
       const availableSize = Math.min(window.innerWidth - 100, window.innerHeight - 350);
       const miniCellSize = Math.floor(availableSize / mazeSize);
       
       const goalPos = mazeSize - 2;
       
-      // First, draw everything in black
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       
-      // Create circular mask for visibility
       ctx.save();
       ctx.beginPath();
       
-      // Player 1 circle
       ctx.arc(
         player1.x * miniCellSize + miniCellSize / 2,
         player1.y * miniCellSize + miniCellSize / 2,
@@ -466,7 +486,6 @@ const MazeBattleGame = () => {
         Math.PI * 2
       );
       
-      // Player 2 circle
       ctx.arc(
         player2.x * miniCellSize + miniCellSize / 2,
         player2.y * miniCellSize + miniCellSize / 2,
@@ -477,7 +496,6 @@ const MazeBattleGame = () => {
       
       ctx.clip();
       
-      // Draw maze within visibility circles
       for (let y = 0; y < mazeSize; y++) {
         for (let x = 0; x < mazeSize; x++) {
           const screenX = x * miniCellSize;
@@ -516,7 +534,6 @@ const MazeBattleGame = () => {
               }
             }
             
-            // Draw goal markers
             if ((x === 1 && y === 1) || (x === goalPos && y === goalPos)) {
               ctx.fillStyle = x === 1 ? 'rgba(220, 20, 60, 0.5)' : 'rgba(65, 105, 225, 0.5)';
               ctx.fillRect(screenX + 1, screenY + 1, miniCellSize - 2, miniCellSize - 2);
@@ -525,7 +542,6 @@ const MazeBattleGame = () => {
         }
       }
       
-      // Draw footprint trails
       const drawMiniTrail = (path, color) => {
         if (path.length < 2) return;
         
@@ -555,19 +571,16 @@ const MazeBattleGame = () => {
       
       ctx.restore();
       
-      // Draw players with eyes (outside mask to always show)
       const drawPlayerWithEyes = (player, direction, color) => {
         const centerX = player.x * miniCellSize + miniCellSize / 2;
         const centerY = player.y * miniCellSize + miniCellSize / 2;
         const radius = Math.max(3, miniCellSize / 3);
         
-        // Body
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
         ctx.fill();
         
-        // Eyes
         ctx.fillStyle = '#FFF';
         const eyeSize = Math.max(1, miniCellSize / 12);
         const eyeOffset = radius / 2;
@@ -604,7 +617,6 @@ const MazeBattleGame = () => {
       drawPlayerWithEyes(player2, direction2, '#4169E1');
       
     } else {
-      // Square or Circle mode: draw two player views
       const drawPlayerView = (player, otherPlayer, otherDirection, footprintPath, offsetX, playerNum, direction) => {
         const otherFootprintPath = playerNum === 1 ? footprintPath2 : footprintPath1;
         const goalPos = mazeSize - 2;
@@ -968,12 +980,11 @@ const MazeBattleGame = () => {
     <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
       {gameState === 'menu' && (
         <div className="text-center">
-          <div className="text-xs mb-2 text-gray-400">v0.5.1</div>
+          <div className="text-xs mb-2 text-gray-400">v0.5.4</div>
           <h1 className="text-5xl font-bold mb-6" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
             迷路バトル
           </h1>
           
-          {/* Maze Size Selection */}
           <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
             <h3 className="text-lg font-bold mb-3" style={{color: '#FFD700'}}>迷路サイズ:</h3>
             <div className="flex flex-col gap-2">
@@ -999,7 +1010,6 @@ const MazeBattleGame = () => {
             </div>
           </div>
 
-          {/* View Mode Selection */}
           <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
             <h3 className="text-lg font-bold mb-2" style={{color: '#FFD700'}}>視界モード:</h3>
             <div className="flex gap-3 justify-center">
@@ -1051,7 +1061,7 @@ const MazeBattleGame = () => {
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.1</div>
+            <div className="text-xs text-gray-400">v0.5.4</div>
             <button
               onClick={cycleViewMode}
               className="text-sm px-3 py-1 rounded transition-all bg-blue-600 hover:bg-blue-700 active:bg-blue-800 border border-yellow-500"
@@ -1063,6 +1073,20 @@ const MazeBattleGame = () => {
               {MAZE_SIZE_OPTIONS.find(opt => opt.size === mazeSize)?.name}
             </div>
           </div>
+          
+          {/* DEBUG: Coordinate display */}
+          <div className="text-xs mb-2 font-mono bg-gray-900 px-3 py-1 rounded border border-yellow-600">
+            <span style={{color: '#FF6B6B'}}>P1:({player1.x},{player1.y})</span>
+            {' | '}
+            <span style={{color: '#6B9BFF'}}>P2:({player2.x},{player2.y})</span>
+            {' | '}
+            <span style={{color: '#FFD700'}}>Maze:{mazeSize}x{mazeSize}</span>
+            {' | '}
+            <span style={{color: '#88FF88'}}>
+              P2@maze={maze[player2.y]?.[player2.x] !== undefined ? maze[player2.y][player2.x] : 'OOB'}
+            </span>
+          </div>
+          
           <canvas
             ref={canvasRef}
             width={canvasSize.width}
@@ -1077,14 +1101,29 @@ const MazeBattleGame = () => {
             <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / Joy-Con(L) | 破壊: E/Lボタン</p>
             <p style={{color: '#6B9BFF'}}>🔵 P2: 矢印/IJKL / Joy-Con(R) | 破壊: U/Shift/Rボタン</p>
             <p style={{color: '#888'}}>🚪 リタイア: Escキー / マイナスボタン | 👁️ 視界切替: Vキーまたは画面タップ</p>
-            {debugMessages.length > 0 && (
-              <div className="mt-3 p-2 bg-gray-900 rounded border border-gray-700 text-xs text-yellow-400 font-mono text-left">
-                <div className="mb-1">デバッグ:</div>
-                {debugMessages.map((msg, i) => (
-                  <div key={i}>{msg}</div>
-                ))}
-              </div>
-            )}
+          </div>
+        </div>
+      )}
+      
+      {showRetireConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+          <div className="bg-gray-900 p-6 rounded-lg border-4 border-red-600 max-w-md">
+            <h2 className="text-2xl font-bold mb-4 text-center text-red-400">リタイアしますか？</h2>
+            <p className="text-sm mb-6 text-center text-gray-300">ゲームを中断してメニューに戻ります</p>
+            <div className="flex gap-4">
+              <button
+                onClick={cancelRetire}
+                className="flex-1 px-6 py-3 rounded-lg font-bold bg-gray-700 hover:bg-gray-600 border-2 border-gray-600"
+              >
+                いいえ
+              </button>
+              <button
+                onClick={confirmRetire}
+                className="flex-1 px-6 py-3 rounded-lg font-bold bg-red-600 hover:bg-red-700 border-2 border-red-500"
+              >
+                はい
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1092,7 +1131,7 @@ const MazeBattleGame = () => {
       {gameState === 'finished' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.1</div>
+            <div className="text-xs text-gray-400">v0.5.4</div>
           </div>
           <canvas
             ref={canvasRef}
@@ -1101,7 +1140,6 @@ const MazeBattleGame = () => {
             className="rounded opacity-30"
           />
           
-          {/* Finish screen overlay on top of touch controls area */}
           <div className="mt-4 bg-gray-900 p-6 rounded-lg border-4 border-yellow-600 shadow-2xl">
             <h1 className="text-4xl font-bold mb-4 text-center" style={{
               color: winner === 1 ? '#FF6B6B' : '#6B9BFF',
