@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>迷路生成ビジュアライザー/title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow-x: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    // maze-visualizer.jsを読み込んでレンダリング
+    const loadComponent = async () => {
+      try {
+        const response = await fetch('./maze-visualizer.js');
+        const code = await response.text();
+        
+        // import/export文を削除してReactを使えるように変換
+        const processedCode = code
+          .replace(/^import\s+.*from\s+['"]react['"];?\s*$/gm, '')
+          .replace(/^export\s+default\s+/gm, 'const MazeVisualizer = ');
+        
+        // コードを評価してコンポーネントを取得
+        const componentFunc = new Function('React', processedCode + '\nreturn MazeVisualizer;');
+        const MazeVisualizer = componentFunc(React);
+        
+        // レンダリング
+        ReactDOM.render(React.createElement(MazeVisualizer), document.getElementById('root'));
+      } catch (error) {
+        console.error('Component load error:', error);
+        document.getElementById('root').innerHTML = `
+          <div style="color: white; background: #1a1a1a; padding: 20px; text-align: center;">
+            <h1>エラー: maze-visualizer.js が読み込めません</h1>
+            <p>同じディレクトリに maze-visualizer.js があることを確認してください。</p>
+            <pre style="text-align: left; background: #333; padding: 10px; border-radius: 5px;">${error.message}</pre>
+          </div>
+        `;
+      }
+    };
+    
+    loadComponent();
+  </script>
+</body>
+</html>
