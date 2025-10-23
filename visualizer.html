@@ -31,15 +31,36 @@
         const response = await fetch('./maze-visualizer.js');
         const code = await response.text();
         
-        // import/export文を削除してReactを使えるように変換
-        const processedCode = code
-          .replace(/^import\s+.*from\s+['"]react['"];?\s*$/gm, '')
-          .replace(/^export\s+default\s+/gm, 'const MazeVisualizer = ');
+      // Convert import statement to const destructuring
+      code = code.replace(
+        /import React, { useState, useEffect, useRef } from 'react';/,
+        'const { useState, useEffect, useRef } = React;'
+      );
+      
+      // Convert export statement to ReactDOM.render
+      code = code.replace(
+        /export default MazeVisualizer;/,
+        "ReactDOM.render(React.createElement(MazeVisualizer), document.getElementById('root'));"
+      );
+
+        // // import/export文を削除してReactを使えるように変換
+        // const processedCode = code
+        //   .replace(/^import\s+.*from\s+['"]react['"];?\s*$/gm, '')
+        //   .replace(/^export\s+default\s+/gm, 'const MazeVisualizer = ');
         
-        // コードを評価してコンポーネントを取得
-        const componentFunc = new Function('React', processedCode + '\nreturn MazeVisualizer;');
-        const MazeVisualizer = componentFunc(React);
+        // // コードを評価してコンポーネントを取得
+        // const componentFunc = new Function('React', processedCode + '\nreturn MazeVisualizer;');
+        // const MazeVisualizer = componentFunc(React);
         
+        // Inject converted code
+        const script = document.createElement('script');
+        script.type = 'text/babel';
+        script.textContent = code;
+        document.body.appendChild(script);
+        
+        // Trigger Babel transformation
+        Babel.transformScriptTags();
+
         // レンダリング
         ReactDOM.render(React.createElement(MazeVisualizer), document.getElementById('root'));
       } catch (error) {
