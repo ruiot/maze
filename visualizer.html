@@ -29,7 +29,7 @@
     const loadComponent = async () => {
       try {
         const response = await fetch('./maze-visualizer.js');
-        const code = await response.text();
+        let code = await response.text();
         
       // Convert import statement to const destructuring
       code = code.replace(
