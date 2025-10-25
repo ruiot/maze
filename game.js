@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.5.5: Fix start button position for landscape, optimize overview mode (remove fog of war)
-// Commit: v0.5.5: Fix start button position for landscape, optimize overview mode (remove fog of war)
+// v0.5.4: Fix coordinate reset in startGame, add retire confirmation modal, fix Enter key
+// Commit: v0.5.4: Fix coordinate reset in startGame, add retire confirmation modal, fix Enter key
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -38,19 +38,15 @@ const MazeBattleGame = () => {
 
   const MAZE_SIZE_OPTIONS = [
     { name: '小 (Dev)', size: 13, nodes: 49, time: '~2分' },
-    { name: '中 (推奨)', size: 31, nodes: 225, time: '~8分' },
-    { name: '大 (長期戦)', size: 43, nodes: 441, time: '~15分' }
+    { name: '中 (Normal)', size: 31, nodes: 225, time: '~7分' },
+    { name: '大 (Challenge)', size: 43, nodes: 441, time: '~12分' }
   ];
 
   const VIEW_MODES = [
-    { id: 'square', name: '四角', icon: '□' },
-    { id: 'circle', name: '円形', icon: '○' },
-    { id: 'overview', name: '全体', icon: '🗺️' }
+    { id: 'square', icon: '□', name: '四角' },
+    { id: 'circle', icon: '○', name: '円形' },
+    { id: 'overview', icon: '🗺️', name: '全体' }
   ];
-
-  const canvasSize = viewMode === 'overview' 
-    ? { width: mazeSize * cellSize, height: mazeSize * cellSize }
-    : { width: ((VISIBILITY * 2 + 1) * cellSize) * 2 + 30, height: (VISIBILITY * 2 + 1) * cellSize };
 
   const addDebugLog = (message) => {
     setDebugMessages(prev => {
@@ -59,13 +55,52 @@ const MazeBattleGame = () => {
     });
   };
 
+  useEffect(() => {
+    const updateCellSize = () => {
+      const availableHeight = window.innerHeight - 250;
+      const availableWidth = window.innerWidth - 100;
+      const maxCellSize = Math.min(
+        Math.floor(availableHeight / 11),
+        Math.floor(availableWidth / 24)
+      );
+      const newCellSize = Math.max(18, Math.min(maxCellSize, 32));
+      setCellSize(newCellSize);
+    };
+
+    updateCellSize();
+    window.addEventListener('resize', updateCellSize);
+    return () => window.removeEventListener('resize', updateCellSize);
+  }, []);
+
+  const playBreakSound = () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    const ctx = audioContextRef.current;
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    
+    oscillator.frequency.value = 150;
+    oscillator.type = 'sawtooth';
+    gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+    
+    oscillator.start(ctx.currentTime);
+    oscillator.stop(ctx.currentTime + 0.3);
+  };
+
   const generateMaze = (size) => {
     const maze = Array(size).fill().map(() => Array(size).fill(1));
+    
     const stack = [];
     const startX = 1;
     const startY = 1;
     maze[startY][startX] = 0;
     stack.push([startX, startY]);
+
     const directions = [[0, -2], [2, 0], [0, 2], [-2, 0]];
 
     while (stack.length > 0) {
@@ -96,6 +131,7 @@ const MazeBattleGame = () => {
   };
 
   const startGame = () => {
+    // Reset coordinates first to clear any previous game state
     setPlayer1({ x: 1, y: 1 });
     setPlayer2({ x: 1, y: 1 });
     
@@ -103,6 +139,7 @@ const MazeBattleGame = () => {
     setMaze(newMaze);
     const goalPos = mazeSize - 2;
     
+    // Set correct positions
     setPlayer2({ x: goalPos, y: goalPos });
     setDirection1({ dx: 1, dy: 0 });
     setDirection2({ dx: -1, dy: 0 });
@@ -113,53 +150,22 @@ const MazeBattleGame = () => {
     setBrokenWalls(new Set());
     setParticles([]);
     setWinner(null);
-    setPressedKeys(new Set());
-    setTouchHolding({ p1: null, p2: null });
-    setShowRetireConfirm(false);
+    setDebugMessages([]);
     setGameState('playing');
-    addDebugLog(`Game started: ${mazeSize}x${mazeSize} maze`);
-  };
-
-  const handleRetire = () => {
-    setShowRetireConfirm(true);
-  };
-
-  const confirmRetire = () => {
-    setPressedKeys(new Set());
-    setTouchHolding({ p1: null, p2: null });
-    setGameState('menu');
-    setShowRetireConfirm(false);
-    addDebugLog('Game retired - returning to menu');
-  };
-
-  const cancelRetire = () => {
-    setShowRetireConfirm(false);
-  };
-
-  const cycleViewMode = () => {
-    const now = Date.now();
-    if (now - lastViewModeToggle < VIEW_MODE_TOGGLE_DELAY) return;
-    
-    setViewMode(prev => {
-      const currentIndex = VIEW_MODES.findIndex(mode => mode.id === prev);
-      const nextIndex = (currentIndex + 1) % VIEW_MODES.length;
-      addDebugLog(`View mode: ${VIEW_MODES[nextIndex].name}`);
-      return VIEW_MODES[nextIndex].id;
-    });
-    setLastViewModeToggle(now);
+    lastMoveRef.current = { p1: Date.now(), p2: Date.now() };
   };
 
   const movePlayer = (player, setPlayer, dx, dy, playerNum, setDirection) => {
-    const goalPos = mazeSize - 2;
-    const goalX = playerNum === 1 ? goalPos : 1;
-    const goalY = playerNum === 1 ? goalPos : 1;
-
     setDirection({ dx, dy });
 
     const newX = player.x + dx;
     const newY = player.y + dy;
 
     if (newX >= 0 && newX < mazeSize && newY >= 0 && newY < mazeSize && maze[newY][newX] === 0) {
+      const goalPos = mazeSize - 2;
+      const goalX = playerNum === 1 ? goalPos : 1;
+      const goalY = playerNum === 1 ? goalPos : 1;
+
       setPlayer({ x: newX, y: newY });
 
       const now = Date.now();
@@ -174,6 +180,7 @@ const MazeBattleGame = () => {
       if (newX === goalX && newY === goalY) {
         setWinner(playerNum);
         setGameState('finished');
+        
         setPressedKeys(new Set());
         setTouchHolding({ p1: null, p2: null });
       }
@@ -181,145 +188,69 @@ const MazeBattleGame = () => {
   };
 
   const breakWall = (player, direction, playerNum) => {
-    const wallBreaks = playerNum === 1 ? wallBreaks1 : wallBreaks2;
-    if (wallBreaks <= 0) return;
+    const breaks = playerNum === 1 ? wallBreaks1 : wallBreaks2;
+    if (breaks <= 0) return;
 
     const wallX = player.x + direction.dx;
     const wallY = player.y + direction.dy;
 
-    if (wallX > 0 && wallX < mazeSize - 1 && wallY > 0 && wallY < mazeSize - 1 && maze[wallY][wallX] === 1) {
-      maze[wallY][wallX] = 0;
+    if (wallX >= 0 && wallX < mazeSize && wallY >= 0 && wallY < mazeSize && maze[wallY][wallX] === 1) {
+      const newMaze = maze.map(row => [...row]);
+      newMaze[wallY][wallX] = 0;
+      setMaze(newMaze);
       setBrokenWalls(prev => new Set([...prev, `${wallX},${wallY}`]));
 
       if (playerNum === 1) {
-        setWallBreaks1(prev => prev - 1);
+        setWallBreaks1(breaks - 1);
       } else {
-        setWallBreaks2(prev => prev - 1);
+        setWallBreaks2(breaks - 1);
       }
 
+      playBreakSound();
+
+      const newParticles = [];
       for (let i = 0; i < 8; i++) {
-        const angle = (Math.PI * 2 * i) / 8;
+        const angle = (i / 8) * Math.PI * 2;
         const speed = 2 + Math.random() * 2;
-        setParticles(prev => [...prev, {
-          x: wallX * cellSize + cellSize / 2,
-          y: wallY * cellSize + cellSize / 2,
+        newParticles.push({
+          x: wallX,
+          y: wallY,
           vx: Math.cos(angle) * speed,
-          vy: Math.sin(angle) * speed - 2,
+          vy: Math.sin(angle) * speed,
           life: 30,
-          color: `rgb(${139 + Math.random() * 50}, ${90 + Math.random() * 30}, ${43 + Math.random() * 20})`
-        }]);
+          playerNum
+        });
       }
-
-      if (audioContextRef.current) {
-        const osc = audioContextRef.current.createOscillator();
-        const gain = audioContextRef.current.createGain();
-        osc.connect(gain);
-        gain.connect(audioContextRef.current.destination);
-        osc.frequency.value = 200;
-        gain.gain.setValueAtTime(0.1, audioContextRef.current.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, audioContextRef.current.currentTime + 0.1);
-        osc.start();
-        osc.stop(audioContextRef.current.currentTime + 0.1);
-      }
+      setParticles(prev => [...prev, ...newParticles]);
     }
   };
 
-  const DPadButton = ({ direction, onStart, onEnd, style, buttonId }) => {
-    const [isPressed, setIsPressed] = useState(false);
-
-    const handlePointerDown = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.target.setPointerCapture) {
-        e.target.setPointerCapture(e.pointerId);
-      }
-      setIsPressed(true);
-      onStart();
-    };
-
-    const handlePointerUp = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsPressed(false);
-      onEnd();
-    };
-
-    const handlePointerCancel = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsPressed(false);
-      onEnd();
-    };
-
-    return (
-      <button
-        onPointerDown={handlePointerDown}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerCancel}
-        className={`w-12 h-12 rounded flex items-center justify-center text-white font-bold select-none transition-all ${
-          isPressed ? 'bg-gray-500 scale-95' : 'bg-gray-700'
-        }`}
-        style={{ ...style, touchAction: 'none' }}
-      >
-        {direction === 'up' && '▲'}
-        {direction === 'down' && '▼'}
-        {direction === 'left' && '◄'}
-        {direction === 'right' && '►'}
-      </button>
-    );
+  const handleRetire = () => {
+    setShowRetireConfirm(true);
+  };
+  
+  const confirmRetire = () => {
+    setShowRetireConfirm(false);
+    setPressedKeys(new Set());
+    setTouchHolding({ p1: null, p2: null });
+    setGameState('menu');
+    addDebugLog('Game retired - returning to menu');
+  };
+  
+  const cancelRetire = () => {
+    setShowRetireConfirm(false);
   };
 
-  const ControlPanel = ({ playerNum, wallBreaks }) => {
-    const handleDPadStart = (dx, dy) => {
-      const key = playerNum === 1 ? 'p1' : 'p2';
-      setTouchHolding(prev => ({ ...prev, [key]: { dx, dy } }));
-      addDebugLog(`DPad Start: P${playerNum} (${dx}, ${dy})`);
-    };
-
-    const handleDPadEnd = () => {
-      const key = playerNum === 1 ? 'p1' : 'p2';
-      setTouchHolding(prev => ({ ...prev, [key]: null }));
-      addDebugLog(`DPad End: P${playerNum}`);
-    };
-
-    const handleBreakWall = () => {
-      if (playerNum === 1) {
-        breakWall(player1, direction1, 1);
-      } else {
-        breakWall(player2, direction2, 2);
-      }
-    };
-
-    return (
-      <div className="flex flex-col items-center gap-2">
-        <div className="text-sm font-bold" style={{ color: playerNum === 1 ? '#FF6B6B' : '#6B9BFF' }}>
-          {playerNum === 1 ? '🔴 Player 1' : '🔵 Player 2'}
-        </div>
-        <div className="text-xs">
-          💣 破壊: {wallBreaks}回
-        </div>
-        <div className="grid grid-cols-3 gap-1">
-          <div></div>
-          <DPadButton direction="up" onStart={() => handleDPadStart(0, -1)} onEnd={handleDPadEnd} buttonId={`p${playerNum}_up`} />
-          <div></div>
-          <DPadButton direction="left" onStart={() => handleDPadStart(-1, 0)} onEnd={handleDPadEnd} buttonId={`p${playerNum}_left`} />
-          <button
-            onPointerDown={(e) => {
-              e.preventDefault();
-              handleBreakWall();
-            }}
-            className="w-12 h-12 bg-red-700 active:bg-red-500 rounded flex items-center justify-center text-2xl select-none"
-            style={{ touchAction: 'none' }}
-          >
-            💣
-          </button>
-          <DPadButton direction="right" onStart={() => handleDPadStart(1, 0)} onEnd={handleDPadEnd} buttonId={`p${playerNum}_right`} />
-          <div></div>
-          <DPadButton direction="down" onStart={() => handleDPadStart(0, 1)} onEnd={handleDPadEnd} buttonId={`p${playerNum}_down`} />
-          <div></div>
-        </div>
-      </div>
-    );
+  const cycleViewMode = () => {
+    const now = Date.now();
+    if (now - lastViewModeToggle < VIEW_MODE_TOGGLE_DELAY) return;
+    
+    setLastViewModeToggle(now);
+    const currentIndex = VIEW_MODES.findIndex(mode => mode.id === viewMode);
+    const nextIndex = (currentIndex + 1) % VIEW_MODES.length;
+    const newMode = VIEW_MODES[nextIndex].id;
+    setViewMode(newMode);
+    addDebugLog(`View mode: ${VIEW_MODES[nextIndex].name}`);
   };
 
   useEffect(() => {
@@ -327,8 +258,8 @@ const MazeBattleGame = () => {
 
     const checkAllInputs = () => {
       const now = Date.now();
-      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-      const debugInfo = [];
+      const gamepads = navigator.getGamepads();
+      let debugInfo = [];
 
       pressedKeys.forEach(key => {
         if ((key === 'w' || key === 'W') && now - lastMoveRef.current.p1 >= MOVE_DELAY) {
@@ -449,10 +380,11 @@ const MazeBattleGame = () => {
     if (gameState === 'menu' || gameState === 'finished') {
       const handleMenuKey = (e) => {
         if (e.key === 'Enter') {
-          if (gameState === 'menu') {
-            startGame();
-          } else {
+          e.preventDefault();
+          if (gameState === 'finished') {
             setGameState('menu');
+          } else {
+            startGame();
           }
         }
       };
@@ -465,12 +397,6 @@ const MazeBattleGame = () => {
     const handleKeyDown = (e) => {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Escape'].includes(e.key)) {
         e.preventDefault();
-      }
-
-      if (e.key === 'v' || e.key === 'V') {
-        cycleViewMode();
-        e.preventDefault();
-        return;
       }
 
       setPressedKeys(prev => new Set([...prev, e.key]));
@@ -486,6 +412,11 @@ const MazeBattleGame = () => {
 
       if (e.key === 'Escape') {
         handleRetire();
+        e.preventDefault();
+      }
+
+      if (e.key === 'v' || e.key === 'V') {
+        cycleViewMode();
         e.preventDefault();
       }
     };
@@ -505,7 +436,7 @@ const MazeBattleGame = () => {
       window.removeEventListener('keydown', handleKeyDown, true);
       window.removeEventListener('keyup', handleKeyUp, true);
     };
-  }, [gameState, player1, player2, maze, direction1, direction2, viewMode]);
+  }, [gameState, player1, player2, maze, direction1, direction2]);
 
   useEffect(() => {
     if (gameState !== 'playing') return;
@@ -536,332 +467,532 @@ const MazeBattleGame = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (viewMode === 'overview') {
-      // 全体モード: フォグオブウォー無し、全体を明るく表示
+      const availableSize = Math.min(window.innerWidth - 100, window.innerHeight - 350);
+      const miniCellSize = Math.floor(availableSize / mazeSize);
+      
+      const goalPos = mazeSize - 2;
+      
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      ctx.save();
+      ctx.beginPath();
+      
+      ctx.arc(
+        player1.x * miniCellSize + miniCellSize / 2,
+        player1.y * miniCellSize + miniCellSize / 2,
+        VISIBILITY * miniCellSize + miniCellSize / 2,
+        0,
+        Math.PI * 2
+      );
+      
+      ctx.arc(
+        player2.x * miniCellSize + miniCellSize / 2,
+        player2.y * miniCellSize + miniCellSize / 2,
+        VISIBILITY * miniCellSize + miniCellSize / 2,
+        0,
+        Math.PI * 2
+      );
+      
+      ctx.clip();
+      
       for (let y = 0; y < mazeSize; y++) {
         for (let x = 0; x < mazeSize; x++) {
-          const screenX = x * cellSize;
-          const screenY = y * cellSize;
-
-          const checkerSize = 3;
-          const isLightTile = (Math.floor(x / checkerSize) + Math.floor(y / checkerSize)) % 2 === 0;
-
-          if (maze[y][x] === 1) {
-            if (brokenWalls.has(`${x},${y}`)) {
-              ctx.fillStyle = '#4a3019';
-            } else {
-              ctx.fillStyle = '#5a5a5a';
-              ctx.fillRect(screenX, screenY, cellSize, cellSize);
-
-              ctx.strokeStyle = '#3a3a3a';
-              ctx.lineWidth = 1;
-              for (let i = 0; i < 3; i++) {
-                const offsetX = Math.random() * cellSize * 0.6 + cellSize * 0.2;
-                const offsetY = Math.random() * cellSize * 0.6 + cellSize * 0.2;
-                const length = Math.random() * cellSize * 0.3 + cellSize * 0.1;
-                const angle = Math.random() * Math.PI;
-                ctx.beginPath();
-                ctx.moveTo(screenX + offsetX, screenY + offsetY);
-                ctx.lineTo(screenX + offsetX + Math.cos(angle) * length, screenY + offsetY + Math.sin(angle) * length);
-                ctx.stroke();
-              }
-              continue;
-            }
+          const screenX = x * miniCellSize;
+          const screenY = y * miniCellSize;
+          
+          const isWall = maze[y][x] === 1;
+          
+          if (isWall) {
+            const gradient = ctx.createLinearGradient(screenX, screenY, screenX + miniCellSize, screenY + miniCellSize);
+            gradient.addColorStop(0, '#5a5a5a');
+            gradient.addColorStop(0.5, '#3a3a3a');
+            gradient.addColorStop(1, '#2a2a2a');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
           } else {
-            const baseColor = isLightTile ? 210 : 190;
-            ctx.fillStyle = `rgb(${baseColor}, ${baseColor - 30}, ${baseColor - 80})`;
-          }
-          ctx.fillRect(screenX, screenY, cellSize, cellSize);
-
-          if ((x === 1 && y === 1) || (x === mazeSize - 2 && y === mazeSize - 2)) {
-            ctx.fillStyle = x === 1 ? 'rgba(220, 20, 60, 0.3)' : 'rgba(65, 105, 225, 0.3)';
-            ctx.fillRect(screenX, screenY, cellSize, cellSize);
+            const isBroken = brokenWalls.has(`${x},${y}`);
+            const checkerSize = Math.max(1, Math.floor(miniCellSize / 6));
+            
+            for (let cy = 0; cy < miniCellSize; cy += checkerSize) {
+              for (let cx = 0; cx < miniCellSize; cx += checkerSize) {
+                const globalX = x * miniCellSize + cx;
+                const globalY = y * miniCellSize + cy;
+                const isCheckerDark = ((Math.floor(globalX / checkerSize) + Math.floor(globalY / checkerSize)) % 2) === 0;
+                
+                let darkColor, lightColor;
+                if (isBroken) {
+                  darkColor = '#4a3019';
+                  lightColor = '#5a3a1f';
+                } else {
+                  darkColor = '#6B4423';
+                  lightColor = '#8B5A2B';
+                }
+                
+                ctx.fillStyle = isCheckerDark ? darkColor : lightColor;
+                ctx.fillRect(screenX + cx, screenY + cy, checkerSize, checkerSize);
+              }
+            }
+            
+            if ((x === 1 && y === 1) || (x === goalPos && y === goalPos)) {
+              ctx.fillStyle = x === 1 ? 'rgba(220, 20, 60, 0.5)' : 'rgba(65, 105, 225, 0.5)';
+              ctx.fillRect(screenX + 1, screenY + 1, miniCellSize - 2, miniCellSize - 2);
+            }
           }
         }
       }
-
-      // 足跡
-      const drawTrail = (path, color) => {
+      
+      const drawMiniTrail = (path, color) => {
         if (path.length < 2) return;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
-        ctx.moveTo(path[0].x * cellSize + cellSize / 2, path[0].y * cellSize + cellSize / 2);
-        for (let i = 1; i < path.length; i++) {
-          ctx.lineTo(path[i].x * cellSize + cellSize / 2, path[i].y * cellSize + cellSize / 2);
+        
+        for (let i = 0; i < path.length - 1; i++) {
+          const p0 = path[i];
+          const p1 = path[i + 1];
+          
+          const screenX0 = p0.x * miniCellSize + miniCellSize / 2;
+          const screenY0 = p0.y * miniCellSize + miniCellSize / 2;
+          const screenX1 = p1.x * miniCellSize + miniCellSize / 2;
+          const screenY1 = p1.y * miniCellSize + miniCellSize / 2;
+          
+          const alpha = 0.3 + (i / path.length) * 0.4;
+          ctx.strokeStyle = color.replace('ALPHA', alpha.toFixed(2));
+          ctx.lineWidth = Math.max(2, miniCellSize / 6);
+          ctx.lineCap = 'round';
+          
+          ctx.beginPath();
+          ctx.moveTo(screenX0, screenY0);
+          ctx.lineTo(screenX1, screenY1);
+          ctx.stroke();
         }
-        ctx.stroke();
       };
-
-      drawTrail(footprintPath1, 'rgba(255, 80, 80, 0.5)');
-      drawTrail(footprintPath2, 'rgba(80, 120, 255, 0.5)');
-
-      // プレイヤー描画
-      const drawPlayerWithEyes = (player, color, direction) => {
-        const screenX = player.x * cellSize + cellSize / 2;
-        const screenY = player.y * cellSize + cellSize / 2;
-        const radius = Math.max(cellSize / 2.5, 5);
-
+      
+      drawMiniTrail(footprintPath1, 'rgba(255, 80, 80, ALPHA)');
+      drawMiniTrail(footprintPath2, 'rgba(80, 80, 255, ALPHA)');
+      
+      ctx.restore();
+      
+      const drawPlayerWithEyes = (player, direction, color) => {
+        const centerX = player.x * miniCellSize + miniCellSize / 2;
+        const centerY = player.y * miniCellSize + miniCellSize / 2;
+        const radius = Math.max(3, miniCellSize / 3);
+        
         ctx.fillStyle = color;
         ctx.beginPath();
-        ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
         ctx.fill();
-
-        const eyeOffsetX = direction.dx * radius * 0.3;
-        const eyeOffsetY = direction.dy * radius * 0.3;
-        const eyeSize = Math.max(radius * 0.25, 2);
-        const eyeSpacing = Math.max(radius * 0.4, 3);
-
-        ctx.fillStyle = 'white';
-        if (direction.dx !== 0) {
-          ctx.beginPath();
-          ctx.arc(screenX + eyeOffsetX, screenY - eyeSpacing / 2, eyeSize, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(screenX + eyeOffsetX, screenY + eyeSpacing / 2, eyeSize, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          ctx.beginPath();
-          ctx.arc(screenX - eyeSpacing / 2, screenY + eyeOffsetY, eyeSize, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(screenX + eyeSpacing / 2, screenY + eyeOffsetY, eyeSize, 0, Math.PI * 2);
-          ctx.fill();
+        
+        ctx.fillStyle = '#FFF';
+        const eyeSize = Math.max(1, miniCellSize / 12);
+        const eyeOffset = radius / 2;
+        
+        let eye1X, eye1Y, eye2X, eye2Y;
+        
+        if (direction.dx === 1 && direction.dy === 0) {
+          eye1X = centerX + eyeOffset;
+          eye1Y = centerY - eyeSize;
+          eye2X = centerX + eyeOffset;
+          eye2Y = centerY + eyeSize;
+        } else if (direction.dx === -1 && direction.dy === 0) {
+          eye1X = centerX - eyeOffset;
+          eye1Y = centerY - eyeSize;
+          eye2X = centerX - eyeOffset;
+          eye2Y = centerY + eyeSize;
+        } else if (direction.dx === 0 && direction.dy === -1) {
+          eye1X = centerX - eyeSize;
+          eye1Y = centerY - eyeOffset;
+          eye2X = centerX + eyeSize;
+          eye2Y = centerY - eyeOffset;
+        } else if (direction.dx === 0 && direction.dy === 1) {
+          eye1X = centerX - eyeSize;
+          eye1Y = centerY + eyeOffset;
+          eye2X = centerX + eyeSize;
+          eye2Y = centerY + eyeOffset;
         }
-
-        ctx.fillStyle = 'black';
-        const pupilSize = Math.max(eyeSize * 0.5, 1);
-        if (direction.dx !== 0) {
-          ctx.beginPath();
-          ctx.arc(screenX + eyeOffsetX + direction.dx * eyeSize * 0.3, screenY - eyeSpacing / 2, pupilSize, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(screenX + eyeOffsetX + direction.dx * eyeSize * 0.3, screenY + eyeSpacing / 2, pupilSize, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          ctx.beginPath();
-          ctx.arc(screenX - eyeSpacing / 2, screenY + eyeOffsetY + direction.dy * eyeSize * 0.3, pupilSize, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(screenX + eyeSpacing / 2, screenY + eyeOffsetY + direction.dy * eyeSize * 0.3, pupilSize, 0, Math.PI * 2);
-          ctx.fill();
-        }
+        
+        ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
+        ctx.fillRect(eye2X - eyeSize / 2, eye2Y - eyeSize / 2, eyeSize, eyeSize);
       };
-
-      drawPlayerWithEyes(player1, '#DC143C', direction1);
-      drawPlayerWithEyes(player2, '#4169E1', direction2);
-
+      
+      drawPlayerWithEyes(player1, direction1, '#DC143C');
+      drawPlayerWithEyes(player2, direction2, '#4169E1');
+      
     } else {
-      // 個別視点モード (square/circle)
       const drawPlayerView = (player, otherPlayer, otherDirection, footprintPath, offsetX, playerNum, direction) => {
         const otherFootprintPath = playerNum === 1 ? footprintPath2 : footprintPath1;
-        const goalX = playerNum === 1 ? mazeSize - 2 : 1;
-        const goalY = playerNum === 1 ? mazeSize - 2 : 1;
-
-        const viewWidth = (VISIBILITY * 2 + 1) * cellSize;
-        const viewHeight = (VISIBILITY * 2 + 1) * cellSize;
-
-        ctx.save();
-        ctx.translate(offsetX, 0);
+        const goalPos = mazeSize - 2;
+        const goalX = playerNum === 1 ? goalPos : 1;
+        const goalY = playerNum === 1 ? goalPos : 1;
 
         if (viewMode === 'circle') {
+          ctx.save();
+          const centerX = offsetX + (VISIBILITY * cellSize) + cellSize / 2;
+          const centerY = (VISIBILITY * cellSize) + cellSize / 2;
+          const radius = VISIBILITY * cellSize + cellSize / 2;
+          
           ctx.beginPath();
-          ctx.arc(viewWidth / 2, viewHeight / 2, VISIBILITY * cellSize + cellSize / 2, 0, Math.PI * 2);
+          ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
           ctx.clip();
         }
 
         for (let dy = -VISIBILITY; dy <= VISIBILITY; dy++) {
           for (let dx = -VISIBILITY; dx <= VISIBILITY; dx++) {
-            const worldX = player.x + dx;
-            const worldY = player.y + dy;
-            if (worldX < 0 || worldX >= mazeSize || worldY < 0 || worldY >= mazeSize) continue;
+            const x = player.x + dx;
+            const y = player.y + dy;
 
-            const screenX = (dx + VISIBILITY) * cellSize;
+            const screenX = offsetX + (dx + VISIBILITY) * cellSize;
             const screenY = (dy + VISIBILITY) * cellSize;
 
-            const checkerSize = 3;
-            const isLightTile = (Math.floor(worldX / checkerSize) + Math.floor(worldY / checkerSize)) % 2 === 0;
-
-            if (maze[worldY][worldX] === 1) {
-              if (brokenWalls.has(`${worldX},${worldY}`)) {
-                ctx.fillStyle = '#4a3019';
-              } else {
-                ctx.fillStyle = '#5a5a5a';
-                ctx.fillRect(screenX, screenY, cellSize, cellSize);
-
-                ctx.strokeStyle = '#3a3a3a';
-                ctx.lineWidth = 1;
-                for (let i = 0; i < 3; i++) {
-                  const offsetX = Math.random() * cellSize * 0.6 + cellSize * 0.2;
-                  const offsetY = Math.random() * cellSize * 0.6 + cellSize * 0.2;
-                  const length = Math.random() * cellSize * 0.3 + cellSize * 0.1;
-                  const angle = Math.random() * Math.PI;
-                  ctx.beginPath();
-                  ctx.moveTo(screenX + offsetX, screenY + offsetY);
-                  ctx.lineTo(screenX + offsetX + Math.cos(angle) * length, screenY + offsetY + Math.sin(angle) * length);
-                  ctx.stroke();
-                }
-                continue;
-              }
-            } else {
-              const baseColor = isLightTile ? 210 : 190;
-              ctx.fillStyle = `rgb(${baseColor}, ${baseColor - 30}, ${baseColor - 80})`;
-            }
-
-            ctx.fillRect(screenX, screenY, cellSize, cellSize);
-
-            if (worldX === goalX && worldY === goalY) {
-              ctx.fillStyle = playerNum === 1 ? 'rgba(65, 105, 225, 0.3)' : 'rgba(220, 20, 60, 0.3)';
+            const isOutOfBounds = x < 0 || x >= mazeSize || y < 0 || y >= mazeSize;
+            const isWall = isOutOfBounds || maze[y][x] === 1;
+            
+            if (isWall) {
+              const gradient = ctx.createLinearGradient(screenX, screenY, screenX + cellSize, screenY + cellSize);
+              gradient.addColorStop(0, '#5a5a5a');
+              gradient.addColorStop(0.5, '#3a3a3a');
+              gradient.addColorStop(1, '#2a2a2a');
+              ctx.fillStyle = gradient;
               ctx.fillRect(screenX, screenY, cellSize, cellSize);
+              
+              ctx.strokeStyle = '#1a1a1a';
+              ctx.lineWidth = 0.5;
+              ctx.globalAlpha = 0.6;
+              ctx.beginPath();
+              ctx.moveTo(screenX + 2, screenY + 1);
+              ctx.lineTo(screenX + cellSize - 3, screenY + cellSize - 2);
+              ctx.stroke();
+              ctx.beginPath();
+              ctx.moveTo(screenX + cellSize - 2, screenY + 3);
+              ctx.lineTo(screenX + 1, screenY + cellSize - 1);
+              ctx.stroke();
+              ctx.globalAlpha = 1.0;
+            } else {
+              const isBroken = brokenWalls.has(`${x},${y}`);
+              const checkerSize = 3;
+              for (let cy = 0; cy < cellSize; cy += checkerSize) {
+                for (let cx = 0; cx < cellSize; cx += checkerSize) {
+                  const globalX = x * cellSize + cx;
+                  const globalY = y * cellSize + cy;
+                  const isCheckerDark = ((Math.floor(globalX / checkerSize) + Math.floor(globalY / checkerSize)) % 2) === 0;
+                  
+                  let darkColor, lightColor;
+                  if (isBroken) {
+                    darkColor = '#4a3019';
+                    lightColor = '#5a3a1f';
+                  } else {
+                    darkColor = '#6B4423';
+                    lightColor = '#8B5A2B';
+                  }
+                  
+                  ctx.fillStyle = isCheckerDark ? darkColor : lightColor;
+                  ctx.fillRect(screenX + cx, screenY + cy, checkerSize, checkerSize);
+                }
+              }
+
+              if (x === goalX && y === goalY) {
+                ctx.fillStyle = playerNum === 1 ? 'rgba(220, 20, 60, 0.5)' : 'rgba(65, 105, 225, 0.5)';
+                ctx.fillRect(screenX + 2, screenY + 2, cellSize - 4, cellSize - 4);
+              }
             }
           }
         }
 
-        otherFootprintPath.forEach(pos => {
-          const dx = pos.x - player.x;
-          const dy = pos.y - player.y;
-          if (Math.abs(dx) <= VISIBILITY && Math.abs(dy) <= VISIBILITY) {
-            const screenX = (dx + VISIBILITY) * cellSize + cellSize / 2;
-            const screenY = (dy + VISIBILITY) * cellSize + cellSize / 2;
-            ctx.fillStyle = playerNum === 1 ? 'rgba(100, 150, 255, 0.3)' : 'rgba(255, 100, 100, 0.3)';
-            ctx.beginPath();
-            ctx.arc(screenX, screenY, cellSize / 4, 0, Math.PI * 2);
-            ctx.fill();
+        const drawFootprintTrail = (path, colorBase) => {
+          if (path.length < 2) return;
+          
+          for (let i = 0; i < path.length - 1; i++) {
+            const p0 = path[i];
+            const p1 = path[i + 1];
+            
+            const dx0 = p0.x - player.x;
+            const dy0 = p0.y - player.y;
+            const dx1 = p1.x - player.x;
+            const dy1 = p1.y - player.y;
+            
+            if (Math.abs(dx0) <= VISIBILITY && Math.abs(dy0) <= VISIBILITY &&
+                Math.abs(dx1) <= VISIBILITY && Math.abs(dy1) <= VISIBILITY) {
+              
+              const screenX0 = offsetX + (dx0 + VISIBILITY) * cellSize + cellSize / 2;
+              const screenY0 = (dy0 + VISIBILITY) * cellSize + cellSize / 2;
+              const screenX1 = offsetX + (dx1 + VISIBILITY) * cellSize + cellSize / 2;
+              const screenY1 = (dy1 + VISIBILITY) * cellSize + cellSize / 2;
+              
+              const alpha = 0.2 + (i / path.length) * 0.5;
+              const baseWidth = 4;
+              const wavyWidth = baseWidth + Math.sin(i * 0.3) * 1.5;
+              
+              const cpX = (screenX0 + screenX1) / 2 + Math.sin(i * 0.5) * 2;
+              const cpY = (screenY0 + screenY1) / 2 + Math.cos(i * 0.5) * 2;
+              
+              ctx.strokeStyle = colorBase.replace('ALPHA', alpha.toFixed(2));
+              ctx.lineWidth = wavyWidth;
+              ctx.lineCap = 'round';
+              ctx.lineJoin = 'round';
+              
+              ctx.beginPath();
+              ctx.moveTo(screenX0, screenY0);
+              ctx.quadraticCurveTo(cpX, cpY, screenX1, screenY1);
+              ctx.stroke();
+            }
           }
-        });
+        };
+
+        const ownColor = playerNum === 1 ? 'rgba(255, 80, 80, ALPHA)' : 'rgba(80, 80, 255, ALPHA)';
+        drawFootprintTrail(footprintPath, ownColor);
+        
+        const otherColor = playerNum === 1 ? 'rgba(80, 80, 255, ALPHA)' : 'rgba(255, 80, 80, ALPHA)';
+        drawFootprintTrail(otherFootprintPath, otherColor);
 
         const otherDx = otherPlayer.x - player.x;
         const otherDy = otherPlayer.y - player.y;
         if (Math.abs(otherDx) <= VISIBILITY && Math.abs(otherDy) <= VISIBILITY) {
-          const screenX = (otherDx + VISIBILITY) * cellSize + cellSize / 2;
-          const screenY = (otherDy + VISIBILITY) * cellSize + cellSize / 2;
-
+          const otherScreenX = offsetX + (otherDx + VISIBILITY) * cellSize;
+          const otherScreenY = (otherDy + VISIBILITY) * cellSize;
+          
           ctx.fillStyle = playerNum === 1 ? '#4169E1' : '#DC143C';
           ctx.beginPath();
-          ctx.arc(screenX, screenY, cellSize / 2, 0, Math.PI * 2);
+          ctx.arc(otherScreenX + cellSize / 2, otherScreenY + cellSize / 2 + 2, cellSize / 2.5, 0, Math.PI * 2);
           ctx.fill();
-
-          const eyeOffsetX = otherDirection.dx * cellSize * 0.15;
-          const eyeOffsetY = otherDirection.dy * cellSize * 0.15;
-          const eyeSize = cellSize * 0.12;
-          const eyeSpacing = cellSize * 0.2;
-
-          ctx.fillStyle = 'white';
-          if (otherDirection.dx !== 0) {
-            ctx.beginPath();
-            ctx.arc(screenX + eyeOffsetX, screenY - eyeSpacing, eyeSize, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(screenX + eyeOffsetX, screenY + eyeSpacing, eyeSize, 0, Math.PI * 2);
-            ctx.fill();
-          } else {
-            ctx.beginPath();
-            ctx.arc(screenX - eyeSpacing, screenY + eyeOffsetY, eyeSize, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(screenX + eyeSpacing, screenY + eyeOffsetY, eyeSize, 0, Math.PI * 2);
-            ctx.fill();
+          
+          ctx.fillStyle = '#FFF';
+          const eyeSize = 3;
+          const eyeOffset = cellSize / 4;
+          
+          const otherCenterX = otherScreenX + cellSize / 2;
+          const otherCenterY = otherScreenY + cellSize / 2;
+          
+          let oeye1X, oeye1Y, oeye2X, oeye2Y;
+          
+          if (otherDirection.dx === 1 && otherDirection.dy === 0) {
+            oeye1X = otherCenterX + eyeOffset;
+            oeye1Y = otherCenterY - eyeSize;
+            oeye2X = otherCenterX + eyeOffset;
+            oeye2Y = otherCenterY + eyeSize;
+          } else if (otherDirection.dx === -1 && otherDirection.dy === 0) {
+            oeye1X = otherCenterX - eyeOffset;
+            oeye1Y = otherCenterY - eyeSize;
+            oeye2X = otherCenterX - eyeOffset;
+            oeye2Y = otherCenterY + eyeSize;
+          } else if (otherDirection.dx === 0 && otherDirection.dy === -1) {
+            oeye1X = otherCenterX - eyeSize;
+            oeye1Y = otherCenterY - eyeOffset;
+            oeye2X = otherCenterX + eyeSize;
+            oeye2Y = otherCenterY - eyeOffset;
+          } else if (otherDirection.dx === 0 && otherDirection.dy === 1) {
+            oeye1X = otherCenterX - eyeSize;
+            oeye1Y = otherCenterY + eyeOffset;
+            oeye2X = otherCenterX + eyeSize;
+            oeye2Y = otherCenterY + eyeOffset;
           }
-
-          ctx.fillStyle = 'black';
-          const pupilSize = eyeSize * 0.5;
-          if (otherDirection.dx !== 0) {
-            ctx.beginPath();
-            ctx.arc(screenX + eyeOffsetX + otherDirection.dx * eyeSize * 0.3, screenY - eyeSpacing, pupilSize, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(screenX + eyeOffsetX + otherDirection.dx * eyeSize * 0.3, screenY + eyeSpacing, pupilSize, 0, Math.PI * 2);
-            ctx.fill();
-          } else {
-            ctx.beginPath();
-            ctx.arc(screenX - eyeSpacing, screenY + eyeOffsetY + otherDirection.dy * eyeSize * 0.3, pupilSize, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(screenX + eyeSpacing, screenY + eyeOffsetY + otherDirection.dy * eyeSize * 0.3, pupilSize, 0, Math.PI * 2);
-            ctx.fill();
-          }
+          
+          ctx.fillRect(oeye1X - eyeSize / 2, oeye1Y - eyeSize / 2, eyeSize, eyeSize);
+          ctx.fillRect(oeye2X - eyeSize / 2, oeye2Y - eyeSize / 2, eyeSize, eyeSize);
         }
 
+        const playerScreenX = offsetX + VISIBILITY * cellSize;
+        const playerScreenY = VISIBILITY * cellSize;
+        
         ctx.fillStyle = playerNum === 1 ? '#DC143C' : '#4169E1';
         ctx.beginPath();
-        ctx.arc(viewWidth / 2, viewHeight / 2, cellSize / 2, 0, Math.PI * 2);
+        ctx.arc(playerScreenX + cellSize / 2, playerScreenY + cellSize / 2 + 2, cellSize / 2.5, 0, Math.PI * 2);
         ctx.fill();
-
-        const eyeOffsetX = direction.dx * cellSize * 0.15;
-        const eyeOffsetY = direction.dy * cellSize * 0.15;
-        const eyeSize = cellSize * 0.12;
-        const eyeSpacing = cellSize * 0.2;
-
-        ctx.fillStyle = 'white';
-        if (direction.dx !== 0) {
-          ctx.beginPath();
-          ctx.arc(viewWidth / 2 + eyeOffsetX, viewHeight / 2 - eyeSpacing, eyeSize, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(viewWidth / 2 + eyeOffsetX, viewHeight / 2 + eyeSpacing, eyeSize, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          ctx.beginPath();
-          ctx.arc(viewWidth / 2 - eyeSpacing, viewHeight / 2 + eyeOffsetY, eyeSize, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(viewWidth / 2 + eyeSpacing, viewHeight / 2 + eyeOffsetY, eyeSize, 0, Math.PI * 2);
-          ctx.fill();
+        
+        ctx.fillStyle = '#FFF';
+        const eyeSize = 3;
+        const eyeOffset = cellSize / 4;
+        
+        const centerX = playerScreenX + cellSize / 2;
+        const centerY = playerScreenY + cellSize / 2;
+        
+        let eye1X, eye1Y, eye2X, eye2Y;
+        
+        if (direction.dx === 1 && direction.dy === 0) {
+          eye1X = centerX + eyeOffset;
+          eye1Y = centerY - eyeSize;
+          eye2X = centerX + eyeOffset;
+          eye2Y = centerY + eyeSize;
+        } else if (direction.dx === -1 && direction.dy === 0) {
+          eye1X = centerX - eyeOffset;
+          eye1Y = centerY - eyeSize;
+          eye2X = centerX - eyeOffset;
+          eye2Y = centerY + eyeSize;
+        } else if (direction.dx === 0 && direction.dy === -1) {
+          eye1X = centerX - eyeSize;
+          eye1Y = centerY - eyeOffset;
+          eye2X = centerX + eyeSize;
+          eye2Y = centerY - eyeOffset;
+        } else if (direction.dx === 0 && direction.dy === 1) {
+          eye1X = centerX - eyeSize;
+          eye1Y = centerY + eyeOffset;
+          eye2X = centerX + eyeSize;
+          eye2Y = centerY + eyeOffset;
         }
+        
+        ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
+        ctx.fillRect(eye2X - eyeSize / 2, eye2Y - eyeSize / 2, eyeSize, eyeSize);
 
-        ctx.fillStyle = 'black';
-        const pupilSize = eyeSize * 0.5;
-        if (direction.dx !== 0) {
-          ctx.beginPath();
-          ctx.arc(viewWidth / 2 + eyeOffsetX + direction.dx * eyeSize * 0.3, viewHeight / 2 - eyeSpacing, pupilSize, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(viewWidth / 2 + eyeOffsetX + direction.dx * eyeSize * 0.3, viewHeight / 2 + eyeSpacing, pupilSize, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          ctx.beginPath();
-          ctx.arc(viewWidth / 2 - eyeSpacing, viewHeight / 2 + eyeOffsetY + direction.dy * eyeSize * 0.3, pupilSize, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(viewWidth / 2 + eyeSpacing, viewHeight / 2 + eyeOffsetY + direction.dy * eyeSize * 0.3, pupilSize, 0, Math.PI * 2);
-          ctx.fill();
+        if (viewMode === 'circle') {
+          ctx.restore();
         }
-
-        ctx.restore();
       };
 
       const viewWidth = (VISIBILITY * 2 + 1) * cellSize;
       drawPlayerView(player1, player2, direction2, footprintPath1, 0, 1, direction1);
       drawPlayerView(player2, player1, direction1, footprintPath2, viewWidth + 30, 2, direction2);
+
+      particles.forEach(p => {
+        const dx = p.x - (p.playerNum === 1 ? player1.x : player2.x);
+        const dy = p.y - (p.playerNum === 1 ? player1.y : player2.y);
+        
+        if (Math.abs(dx) <= VISIBILITY && Math.abs(dy) <= VISIBILITY) {
+          const offsetX = p.playerNum === 1 ? 0 : viewWidth + 30;
+          const screenX = offsetX + (dx + VISIBILITY) * cellSize + p.vx * 2;
+          const screenY = (dy + VISIBILITY) * cellSize + p.vy * 2;
+          
+          ctx.fillStyle = p.playerNum === 1 ? `rgba(255, 100, 100, ${p.life / 30})` : `rgba(100, 100, 255, ${p.life / 30})`;
+          ctx.beginPath();
+          ctx.arc(screenX, screenY, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
     }
+  }, [gameState, player1, player2, direction1, direction2, footprintPath1, footprintPath2, maze, particles, brokenWalls, cellSize, viewMode, mazeSize]);
 
-    particles.forEach(p => {
-      ctx.fillStyle = p.color;
-      ctx.fillRect(p.x, p.y, 3, 3);
-    });
+  const handleBreakButton = (playerNum) => {
+    if (playerNum === 1) {
+      breakWall(player1, direction1, 1);
+    } else {
+      breakWall(player2, direction2, 2);
+    }
+  };
 
-  }, [gameState, maze, player1, player2, direction1, direction2, footprintPath1, footprintPath2, brokenWalls, particles, cellSize, mazeSize, viewMode]);
+  const getCanvasSize = () => {
+    if (viewMode === 'overview') {
+      const availableSize = Math.min(window.innerWidth - 100, window.innerHeight - 350);
+      const miniCellSize = Math.floor(availableSize / mazeSize);
+      const size = mazeSize * miniCellSize;
+      return { width: size, height: size };
+    } else {
+      const viewWidth = (VISIBILITY * 2 + 1) * cellSize;
+      return {
+        width: viewWidth * 2 + 30,
+        height: (VISIBILITY * 2 + 1) * cellSize
+      };
+    }
+  };
+
+  const canvasSize = getCanvasSize();
+
+  const DPadButton = ({ direction, playerNum, dx, dy, style }) => {
+    const [isPointerDown, setIsPointerDown] = useState(false);
+
+    const handlePointerDown = (e) => {
+      e.preventDefault();
+      setIsPointerDown(true);
+      e.currentTarget.setPointerCapture(e.pointerId);
+      
+      const key = playerNum === 1 ? 'p1' : 'p2';
+      setTouchHolding(prev => ({ ...prev, [key]: { dx, dy } }));
+    };
+
+    const handlePointerUp = (e) => {
+      e.preventDefault();
+      setIsPointerDown(false);
+      
+      const key = playerNum === 1 ? 'p1' : 'p2';
+      setTouchHolding(prev => ({ ...prev, [key]: null }));
+    };
+
+    const handlePointerCancel = (e) => {
+      e.preventDefault();
+      setIsPointerDown(false);
+      
+      const key = playerNum === 1 ? 'p1' : 'p2';
+      setTouchHolding(prev => ({ ...prev, [key]: null }));
+    };
+
+    return (
+      <button
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        className="w-12 h-12 bg-gray-700 active:bg-gray-500 rounded flex items-center justify-center text-white font-bold select-none"
+        style={{ ...style, touchAction: 'none' }}
+      >
+        {direction === 'up' && '▲'}
+        {direction === 'down' && '▼'}
+        {direction === 'left' && '◀'}
+        {direction === 'right' && '▶'}
+      </button>
+    );
+  };
+
+  const ControlPanel = ({ playerNum, wallBreaks }) => (
+    <div className="flex flex-col items-center gap-2">
+      <div className="relative w-40 h-40">
+        <DPadButton 
+          direction="up" 
+          playerNum={playerNum}
+          dx={0}
+          dy={-1}
+          style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }} 
+        />
+        <DPadButton 
+          direction="down" 
+          playerNum={playerNum}
+          dx={0}
+          dy={1}
+          style={{ position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)' }} 
+        />
+        <DPadButton 
+          direction="left" 
+          playerNum={playerNum}
+          dx={-1}
+          dy={0}
+          style={{ position: 'absolute', top: '50%', left: 0, transform: 'translateY(-50%)' }} 
+        />
+        <DPadButton 
+          direction="right" 
+          playerNum={playerNum}
+          dx={1}
+          dy={0}
+          style={{ position: 'absolute', top: '50%', right: 0, transform: 'translateY(-50%)' }} 
+        />
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-gray-800 rounded"></div>
+      </div>
+      <div className="flex gap-1">
+        {[...Array(wallBreaks)].map((_, i) => (
+          <button
+            key={i}
+            onTouchStart={(e) => { e.preventDefault(); handleBreakButton(playerNum); }}
+            onClick={() => handleBreakButton(playerNum)}
+            className="text-2xl active:scale-90 transition-transform select-none"
+          >
+            🧨
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 
   const currentViewMode = VIEW_MODES.find(mode => mode.id === viewMode);
 
   return (
-    <div className="flex flex-col items-center justify-start min-h-screen bg-black text-white p-4 pt-2">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
       {gameState === 'menu' && (
-        <div className="text-center w-full max-w-2xl">
-          <div className="text-xs mb-2 text-gray-400">v0.5.5</div>
-          <h1 className="text-4xl md:text-5xl font-bold mb-4" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
+        <div className="text-center">
+          <div className="text-xs mb-2 text-gray-400">v0.5.4</div>
+          <h1 className="text-5xl font-bold mb-6" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
             迷路バトル
           </h1>
           
-          <div className="mb-3 bg-gray-900 p-3 rounded-lg border-2 border-gray-700">
-            <h3 className="text-base font-bold mb-2" style={{color: '#FFD700'}}>迷路サイズ:</h3>
+          <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
+            <h3 className="text-lg font-bold mb-3" style={{color: '#FFD700'}}>迷路サイズ:</h3>
             <div className="flex flex-col gap-2">
               {MAZE_SIZE_OPTIONS.map(option => (
                 <button
                   key={option.size}
                   onClick={() => setMazeSize(option.size)}
-                  className={`px-3 py-2 rounded-lg font-bold transition-all text-left text-sm ${
+                  className={`px-4 py-3 rounded-lg font-bold transition-all text-left ${
                     mazeSize === option.size 
                       ? 'bg-blue-600 border-2 border-yellow-500 shadow-lg' 
                       : 'bg-gray-700 border-2 border-gray-600'
@@ -869,7 +1000,7 @@ const MazeBattleGame = () => {
                 >
                   <div className="flex justify-between items-center">
                     <span>{option.name}</span>
-                    <span className="text-xs text-gray-300">{option.time}</span>
+                    <span className="text-sm text-gray-300">{option.time}</span>
                   </div>
                   <div className="text-xs text-gray-400 mt-1">
                     {option.size}×{option.size} ({option.nodes}ノード)
@@ -879,14 +1010,14 @@ const MazeBattleGame = () => {
             </div>
           </div>
 
-          <div className="mb-3 bg-gray-900 p-3 rounded-lg border-2 border-gray-700">
-            <h3 className="text-base font-bold mb-2" style={{color: '#FFD700'}}>視界モード:</h3>
-            <div className="flex gap-2 justify-center">
+          <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
+            <h3 className="text-lg font-bold mb-2" style={{color: '#FFD700'}}>視界モード:</h3>
+            <div className="flex gap-3 justify-center">
               {VIEW_MODES.map(mode => (
                 <button
                   key={mode.id}
                   onClick={() => setViewMode(mode.id)}
-                  className={`px-4 py-2 rounded-lg font-bold transition-all text-sm ${
+                  className={`px-6 py-2 rounded-lg font-bold transition-all ${
                     viewMode === mode.id 
                       ? 'bg-blue-600 border-2 border-yellow-500 shadow-lg' 
                       : 'bg-gray-700 border-2 border-gray-600'
@@ -898,9 +1029,9 @@ const MazeBattleGame = () => {
             </div>
           </div>
           
-          <div className="mb-3 text-left bg-gray-900 p-4 rounded-lg border-4 border-yellow-600">
-            <h2 className="text-base font-bold mb-2" style={{color: '#FFD700'}}>ルール:</h2>
-            <ul className="space-y-1 text-xs">
+          <div className="mb-6 text-left bg-gray-900 p-6 rounded-lg max-w-md border-4 border-yellow-600 mx-auto">
+            <h2 className="text-xl font-bold mb-3" style={{color: '#FFD700'}}>ルール:</h2>
+            <ul className="space-y-2 text-sm">
               <li>🔴 Player 1: 左上スタート → 右下ゴールで勝利</li>
               <li>🔵 Player 2: 右下スタート → 左上ゴールで勝利</li>
               <li>📱 タッチ: 画面の十字ボタン / 爆弾タップで破壊</li>
@@ -915,7 +1046,7 @@ const MazeBattleGame = () => {
           </div>
           <button
             onClick={startGame}
-            className="px-6 py-3 rounded-lg text-lg font-bold"
+            className="px-8 py-3 rounded-lg text-xl font-bold mb-4"
             style={{
               background: '#1E90FF',
               border: '4px solid #FFD700',
@@ -930,7 +1061,7 @@ const MazeBattleGame = () => {
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.5</div>
+            <div className="text-xs text-gray-400">v0.5.4</div>
             <button
               onClick={cycleViewMode}
               className="text-sm px-3 py-1 rounded transition-all bg-blue-600 hover:bg-blue-700 active:bg-blue-800 border border-yellow-500"
@@ -941,6 +1072,19 @@ const MazeBattleGame = () => {
             <div className="text-xs text-gray-400">
               {MAZE_SIZE_OPTIONS.find(opt => opt.size === mazeSize)?.name}
             </div>
+          </div>
+          
+          {/* DEBUG: Coordinate display */}
+          <div className="text-xs mb-2 font-mono bg-gray-900 px-3 py-1 rounded border border-yellow-600">
+            <span style={{color: '#FF6B6B'}}>P1:({player1.x},{player1.y})</span>
+            {' | '}
+            <span style={{color: '#6B9BFF'}}>P2:({player2.x},{player2.y})</span>
+            {' | '}
+            <span style={{color: '#FFD700'}}>Maze:{mazeSize}x{mazeSize}</span>
+            {' | '}
+            <span style={{color: '#88FF88'}}>
+              P2@maze={maze[player2.y]?.[player2.x] !== undefined ? maze[player2.y][player2.x] : 'OOB'}
+            </span>
           </div>
           
           <canvas
@@ -987,7 +1131,7 @@ const MazeBattleGame = () => {
       {gameState === 'finished' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.5</div>
+            <div className="text-xs text-gray-400">v0.5.4</div>
           </div>
           <canvas
             ref={canvasRef}
