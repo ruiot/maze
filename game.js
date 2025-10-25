@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.5.4: Fix coordinate reset in startGame, add retire confirmation modal, fix Enter key
+// v0.5.14: Fix coordinate reset in startGame, add retire confirmation modal, fix Enter key
 // Commit: v0.5.4: Fix coordinate reset in startGame, add retire confirmation modal, fix Enter key
 
 const MazeBattleGame = () => {
