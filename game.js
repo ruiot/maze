@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 // v0.5.14: Fix coordinate reset in startGame, add retire confirmation modal, fix Enter key
-// Commit: v0.5.4: Fix coordinate reset in startGame, add retire confirmation modal, fix Enter key
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -1061,7 +1060,7 @@ const MazeBattleGame = () => {
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.4</div>
+            <div className="text-xs text-gray-400">v0.5.14</div>
             <button
               onClick={cycleViewMode}
               className="text-sm px-3 py-1 rounded transition-all bg-blue-600 hover:bg-blue-700 active:bg-blue-800 border border-yellow-500"
