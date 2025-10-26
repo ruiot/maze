@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 
-export default function GamepadViewer() {
+const GamepadViewer = () => {
   const [gamepads, setGamepads] = useState({});
 
   useEffect(() => {
@@ -59,3 +59,5 @@ export default function GamepadViewer() {
     </div>
   );
 }
+
+export default MazeBattleGame;
