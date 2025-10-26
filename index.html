@@ -33,10 +33,10 @@
       
       // Convert export statement to ReactDOM.render
       code = code.replace(
-        /export default MazeBattleGame;/,
-        "ReactDOM.render(React.createElement(MazeBattleGame), document.getElementById('root'));"
+        /export default (\w+);/,
+        "ReactDOM.render(React.createElement($1), document.getElementById('root'));"
       );
-      
+
       // Inject converted code
       const script = document.createElement('script');
       script.type = 'text/babel';
