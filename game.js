@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.5.15: Fix start button position, remove fog-of-war clipping, set maze size to 31x31
+// v0.5.16: Remove square view mode, switch to overview mode on game end
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -32,11 +32,10 @@ const MazeBattleGame = () => {
   const audioContextRef = useRef(null);
 
   const VISIBILITY = 5;
-  const MOVE_DELAY = 250;
+  const MOVE_DELAY = 300;
   const VIEW_MODE_TOGGLE_DELAY = 200;
 
   const VIEW_MODES = [
-    { id: 'square', icon: '□', name: '四角' },
     { id: 'circle', icon: '○', name: '円形' },
     { id: 'overview', icon: '🗺️', name: '全体' }
   ];
@@ -172,6 +171,7 @@ const MazeBattleGame = () => {
 
       if (newX === goalX && newY === goalY) {
         setWinner(playerNum);
+        setViewMode('overview'); // Switch to overview mode on game end
         setGameState('finished');
         
         setPressedKeys(new Set());
@@ -951,7 +951,7 @@ const MazeBattleGame = () => {
     <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
       {gameState === 'menu' && (
         <div className="text-center">
-          <div className="text-xs mb-2 text-gray-400">v0.5.15</div>
+          <div className="text-xs mb-2 text-gray-400">v0.5.16</div>
           <h1 className="text-5xl font-bold mb-6" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
             迷路バトル
           </h1>
@@ -997,7 +997,7 @@ const MazeBattleGame = () => {
               <li>🎮 Joy-Con(L+R): レバー、ボタン全対応</li>
               <li>💣 破壊: P1はE/Lボタン / P2はU/Shift/Rボタン (各3回)</li>
               <li>🚪 リタイア: Escキー / Joy-Conプラス+マイナス同時押し</li>
-              <li>👁️ 視界切替: Vキーまたは画面タップ (□ ⇔ ○ ⇔ 🗺️)</li>
+              <li>👁️ 視界切替: Vキーまたは画面タップ (○ ⇔ 🗺️)</li>
               <li>👣 足跡が相手に見える!</li>
               <li>👀 視界内なら相手も見える!</li>
               <li>🗺️ 迷路サイズ: 31×31 (225ノード)</li>
@@ -1009,7 +1009,7 @@ const MazeBattleGame = () => {
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.15</div>
+            <div className="text-xs text-gray-400">v0.5.16</div>
             <button
               onClick={cycleViewMode}
               className="text-sm px-3 py-1 rounded transition-all bg-blue-600 hover:bg-blue-700 active:bg-blue-800 border border-yellow-500"
@@ -1079,7 +1079,7 @@ const MazeBattleGame = () => {
       {gameState === 'finished' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.15</div>
+            <div className="text-xs text-gray-400">v0.5.16</div>
           </div>
           <canvas
             ref={canvasRef}
