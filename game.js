@@ -5,7 +5,7 @@ import React, { useState, useEffect, useRef } from 'react';
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
   const [maze, setMaze] = useState([]);
-  const [mazeSize] = useState(31); // Fixed to 31x31
+  const [mazeSize] = useState(31);
   const [player1, setPlayer1] = useState({ x: 1, y: 1 });
   const [player2, setPlayer2] = useState({ x: 11, y: 11 });
   const [direction1, setDirection1] = useState({ dx: 1, dy: 0 });
@@ -122,7 +122,6 @@ const MazeBattleGame = () => {
   };
 
   const startGame = () => {
-    // Reset coordinates first to clear any previous game state
     setPlayer1({ x: 1, y: 1 });
     setPlayer2({ x: 1, y: 1 });
     
@@ -130,7 +129,6 @@ const MazeBattleGame = () => {
     setMaze(newMaze);
     const goalPos = mazeSize - 2;
     
-    // Set correct positions
     setPlayer2({ x: goalPos, y: goalPos });
     setDirection1({ dx: 1, dy: 0 });
     setDirection2({ dx: -1, dy: 0 });
@@ -444,6 +442,7 @@ const MazeBattleGame = () => {
   useEffect(() => {
     if (!canvasRef.current) return;
     if (gameState !== 'playing' && gameState !== 'finished') return;
+    if (maze.length === 0) return;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
@@ -460,7 +459,6 @@ const MazeBattleGame = () => {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       
-      // Draw full maze without fog-of-war clipping
       for (let y = 0; y < mazeSize; y++) {
         for (let x = 0; x < mazeSize; x++) {
           const screenX = x * miniCellSize;
@@ -586,7 +584,6 @@ const MazeBattleGame = () => {
         const goalX = playerNum === 1 ? goalPos : 1;
         const goalY = playerNum === 1 ? goalPos : 1;
 
-        // Circle view is always applied (square mode removed)
         ctx.save();
         const centerX = offsetX + (VISIBILITY * cellSize) + cellSize / 2;
         const centerY = (VISIBILITY * cellSize) + cellSize / 2;
@@ -1012,7 +1009,6 @@ const MazeBattleGame = () => {
             </div>
           </div>
           
-          {/* DEBUG: Coordinate display */}
           <div className="text-xs mb-2 font-mono bg-gray-900 px-3 py-1 rounded border border-yellow-600">
             <span style={{color: '#FF6B6B'}}>P1:({player1.x},{player1.y})</span>
             {' | '}
