@@ -22,7 +22,7 @@
 
     // Preprocess game.js: convert import/export to React globals
     (async () => {
-      const response = await fetch(`${ScriptName}?t=${Date.now()}`);
+      const response = await fetch(`${scriptName}?t=${Date.now()}`);
       let code = await response.text();
       
       // Convert import statement to const destructuring
