@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.5.14: Fix coordinate reset in startGame, add retire confirmation modal, fix Enter key
+// v0.5.15: Fix start button position, remove fog-of-war clipping, set maze size to 31x31
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
   const [maze, setMaze] = useState([]);
-  const [mazeSize, setMazeSize] = useState(43);
+  const [mazeSize] = useState(31); // Fixed to 31x31
   const [player1, setPlayer1] = useState({ x: 1, y: 1 });
   const [player2, setPlayer2] = useState({ x: 11, y: 11 });
   const [direction1, setDirection1] = useState({ dx: 1, dy: 0 });
@@ -34,12 +34,6 @@ const MazeBattleGame = () => {
   const VISIBILITY = 5;
   const MOVE_DELAY = 180;
   const VIEW_MODE_TOGGLE_DELAY = 200;
-
-  const MAZE_SIZE_OPTIONS = [
-    { name: '小 (Dev)', size: 13, nodes: 49, time: '~2分' },
-    { name: '中 (Normal)', size: 31, nodes: 225, time: '~7分' },
-    { name: '大 (Challenge)', size: 43, nodes: 441, time: '~12分' }
-  ];
 
   const VIEW_MODES = [
     { id: 'square', icon: '□', name: '四角' },
@@ -474,27 +468,7 @@ const MazeBattleGame = () => {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       
-      ctx.save();
-      ctx.beginPath();
-      
-      ctx.arc(
-        player1.x * miniCellSize + miniCellSize / 2,
-        player1.y * miniCellSize + miniCellSize / 2,
-        VISIBILITY * miniCellSize + miniCellSize / 2,
-        0,
-        Math.PI * 2
-      );
-      
-      ctx.arc(
-        player2.x * miniCellSize + miniCellSize / 2,
-        player2.y * miniCellSize + miniCellSize / 2,
-        VISIBILITY * miniCellSize + miniCellSize / 2,
-        0,
-        Math.PI * 2
-      );
-      
-      ctx.clip();
-      
+      // Draw full maze without fog-of-war clipping
       for (let y = 0; y < mazeSize; y++) {
         for (let x = 0; x < mazeSize; x++) {
           const screenX = x * miniCellSize;
@@ -567,8 +541,6 @@ const MazeBattleGame = () => {
       
       drawMiniTrail(footprintPath1, 'rgba(255, 80, 80, ALPHA)');
       drawMiniTrail(footprintPath2, 'rgba(80, 80, 255, ALPHA)');
-      
-      ctx.restore();
       
       const drawPlayerWithEyes = (player, direction, color) => {
         const centerX = player.x * miniCellSize + miniCellSize / 2;
@@ -979,35 +951,22 @@ const MazeBattleGame = () => {
     <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
       {gameState === 'menu' && (
         <div className="text-center">
-          <div className="text-xs mb-2 text-gray-400">v0.5.4</div>
+          <div className="text-xs mb-2 text-gray-400">v0.5.15</div>
           <h1 className="text-5xl font-bold mb-6" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
             迷路バトル
           </h1>
           
-          <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
-            <h3 className="text-lg font-bold mb-3" style={{color: '#FFD700'}}>迷路サイズ:</h3>
-            <div className="flex flex-col gap-2">
-              {MAZE_SIZE_OPTIONS.map(option => (
-                <button
-                  key={option.size}
-                  onClick={() => setMazeSize(option.size)}
-                  className={`px-4 py-3 rounded-lg font-bold transition-all text-left ${
-                    mazeSize === option.size 
-                      ? 'bg-blue-600 border-2 border-yellow-500 shadow-lg' 
-                      : 'bg-gray-700 border-2 border-gray-600'
-                  }`}
-                >
-                  <div className="flex justify-between items-center">
-                    <span>{option.name}</span>
-                    <span className="text-sm text-gray-300">{option.time}</span>
-                  </div>
-                  <div className="text-xs text-gray-400 mt-1">
-                    {option.size}×{option.size} ({option.nodes}ノード)
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+          <button
+            onClick={startGame}
+            className="px-8 py-3 rounded-lg text-xl font-bold mb-6"
+            style={{
+              background: '#1E90FF',
+              border: '4px solid #FFD700',
+              boxShadow: '0 4px 0 #8B4513'
+            }}
+          >
+            ゲーム開始 (Enter)
+          </button>
 
           <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
             <h3 className="text-lg font-bold mb-2" style={{color: '#FFD700'}}>視界モード:</h3>
@@ -1041,26 +1000,16 @@ const MazeBattleGame = () => {
               <li>👁️ 視界切替: Vキーまたは画面タップ (□ ⇔ ○ ⇔ 🗺️)</li>
               <li>👣 足跡が相手に見える!</li>
               <li>👀 視界内なら相手も見える!</li>
+              <li>🗺️ 迷路サイズ: 31×31 (225ノード)</li>
             </ul>
           </div>
-          <button
-            onClick={startGame}
-            className="px-8 py-3 rounded-lg text-xl font-bold mb-4"
-            style={{
-              background: '#1E90FF',
-              border: '4px solid #FFD700',
-              boxShadow: '0 4px 0 #8B4513'
-            }}
-          >
-            ゲーム開始 (Enter)
-          </button>
         </div>
       )}
 
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.14</div>
+            <div className="text-xs text-gray-400">v0.5.15</div>
             <button
               onClick={cycleViewMode}
               className="text-sm px-3 py-1 rounded transition-all bg-blue-600 hover:bg-blue-700 active:bg-blue-800 border border-yellow-500"
@@ -1069,7 +1018,7 @@ const MazeBattleGame = () => {
               {currentViewMode?.icon} {currentViewMode?.name}
             </button>
             <div className="text-xs text-gray-400">
-              {MAZE_SIZE_OPTIONS.find(opt => opt.size === mazeSize)?.name}
+              31×31
             </div>
           </div>
           
@@ -1130,7 +1079,7 @@ const MazeBattleGame = () => {
       {gameState === 'finished' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.4</div>
+            <div className="text-xs text-gray-400">v0.5.15</div>
           </div>
           <canvas
             ref={canvasRef}
