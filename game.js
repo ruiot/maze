@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.5.15: Fix start button position, remove fog-of-war clipping, set maze size to 31x31
+// v0.5.16: Remove square view mode, remove retire confirmation, add plus+minus retire, show overview on finish, adjust MOVE_DELAY to 250ms
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -24,7 +24,6 @@ const MazeBattleGame = () => {
   const [debugMessages, setDebugMessages] = useState([]);
   const [viewMode, setViewMode] = useState('circle');
   const [lastViewModeToggle, setLastViewModeToggle] = useState(0);
-  const [showRetireConfirm, setShowRetireConfirm] = useState(false);
   
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
@@ -32,11 +31,10 @@ const MazeBattleGame = () => {
   const audioContextRef = useRef(null);
 
   const VISIBILITY = 5;
-  const MOVE_DELAY = 180;
+  const MOVE_DELAY = 250;
   const VIEW_MODE_TOGGLE_DELAY = 200;
 
   const VIEW_MODES = [
-    { id: 'square', icon: '□', name: '四角' },
     { id: 'circle', icon: '○', name: '円形' },
     { id: 'overview', icon: '🗺️', name: '全体' }
   ];
@@ -219,19 +217,10 @@ const MazeBattleGame = () => {
   };
 
   const handleRetire = () => {
-    setShowRetireConfirm(true);
-  };
-  
-  const confirmRetire = () => {
-    setShowRetireConfirm(false);
     setPressedKeys(new Set());
     setTouchHolding({ p1: null, p2: null });
     setGameState('menu');
     addDebugLog('Game retired - returning to menu');
-  };
-  
-  const cancelRetire = () => {
-    setShowRetireConfirm(false);
   };
 
   const cycleViewMode = () => {
@@ -351,7 +340,7 @@ const MazeBattleGame = () => {
 
         if (gp.buttons[4]?.pressed) breakWall(player1, direction1, 1);
         if (gp.buttons[5]?.pressed) breakWall(player2, direction2, 2);
-        if (gp.buttons[8]?.pressed) handleRetire();
+        if (gp.buttons[8]?.pressed && gp.buttons[9]?.pressed) handleRetire();
       }
 
       if (debugInfo.length > 0) {
@@ -453,13 +442,16 @@ const MazeBattleGame = () => {
   }, [gameState]);
 
   useEffect(() => {
-    if (gameState !== 'playing' || !canvasRef.current) return;
+    if (!canvasRef.current) return;
+    if (gameState !== 'playing' && gameState !== 'finished') return;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    if (viewMode === 'overview') {
+    const shouldShowOverview = viewMode === 'overview' || gameState === 'finished';
+
+    if (shouldShowOverview) {
       const availableSize = Math.min(window.innerWidth - 100, window.innerHeight - 350);
       const miniCellSize = Math.floor(availableSize / mazeSize);
       
@@ -594,16 +586,15 @@ const MazeBattleGame = () => {
         const goalX = playerNum === 1 ? goalPos : 1;
         const goalY = playerNum === 1 ? goalPos : 1;
 
-        if (viewMode === 'circle') {
-          ctx.save();
-          const centerX = offsetX + (VISIBILITY * cellSize) + cellSize / 2;
-          const centerY = (VISIBILITY * cellSize) + cellSize / 2;
-          const radius = VISIBILITY * cellSize + cellSize / 2;
-          
-          ctx.beginPath();
-          ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-          ctx.clip();
-        }
+        // Circle view is always applied (square mode removed)
+        ctx.save();
+        const centerX = offsetX + (VISIBILITY * cellSize) + cellSize / 2;
+        const centerY = (VISIBILITY * cellSize) + cellSize / 2;
+        const radius = VISIBILITY * cellSize + cellSize / 2;
+        
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.clip();
 
         for (let dy = -VISIBILITY; dy <= VISIBILITY; dy++) {
           for (let dx = -VISIBILITY; dx <= VISIBILITY; dx++) {
@@ -801,9 +792,7 @@ const MazeBattleGame = () => {
         ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
         ctx.fillRect(eye2X - eyeSize / 2, eye2Y - eyeSize / 2, eyeSize, eyeSize);
 
-        if (viewMode === 'circle') {
-          ctx.restore();
-        }
+        ctx.restore();
       };
 
       const viewWidth = (VISIBILITY * 2 + 1) * cellSize;
@@ -837,7 +826,8 @@ const MazeBattleGame = () => {
   };
 
   const getCanvasSize = () => {
-    if (viewMode === 'overview') {
+    const shouldShowOverview = viewMode === 'overview' || gameState === 'finished';
+    if (shouldShowOverview) {
       const availableSize = Math.min(window.innerWidth - 100, window.innerHeight - 350);
       const miniCellSize = Math.floor(availableSize / mazeSize);
       const size = mazeSize * miniCellSize;
@@ -951,7 +941,7 @@ const MazeBattleGame = () => {
     <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
       {gameState === 'menu' && (
         <div className="text-center">
-          <div className="text-xs mb-2 text-gray-400">v0.5.15</div>
+          <div className="text-xs mb-2 text-gray-400">v0.5.16</div>
           <h1 className="text-5xl font-bold mb-6" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
             迷路バトル
           </h1>
@@ -996,8 +986,8 @@ const MazeBattleGame = () => {
               <li>⌨️ キーボード: WASD / 矢印キーorIJKL (押しっぱなしOK)</li>
               <li>🎮 Joy-Con(L+R): レバー、ボタン全対応</li>
               <li>💣 破壊: P1はE/Lボタン / P2はU/Shift/Rボタン (各3回)</li>
-              <li>🚪 リタイア: Escキー / Joy-Conマイナスボタン</li>
-              <li>👁️ 視界切替: Vキーまたは画面タップ (□ ⇔ ○ ⇔ 🗺️)</li>
+              <li>🚪 リタイア: Escキー / Joy-Conプラス+マイナス同時押し</li>
+              <li>👁️ 視界切替: Vキーまたは画面タップ (○ ⇔ 🗺️)</li>
               <li>👣 足跡が相手に見える!</li>
               <li>👀 視界内なら相手も見える!</li>
               <li>🗺️ 迷路サイズ: 31×31 (225ノード)</li>
@@ -1009,7 +999,7 @@ const MazeBattleGame = () => {
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.15</div>
+            <div className="text-xs text-gray-400">v0.5.16</div>
             <button
               onClick={cycleViewMode}
               className="text-sm px-3 py-1 rounded transition-all bg-blue-600 hover:bg-blue-700 active:bg-blue-800 border border-yellow-500"
@@ -1048,30 +1038,7 @@ const MazeBattleGame = () => {
           <div className="mt-4 text-center text-xs space-y-1 w-full max-w-4xl">
             <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / Joy-Con(L) | 破壊: E/Lボタン</p>
             <p style={{color: '#6B9BFF'}}>🔵 P2: 矢印/IJKL / Joy-Con(R) | 破壊: U/Shift/Rボタン</p>
-            <p style={{color: '#888'}}>🚪 リタイア: Escキー / マイナスボタン | 👁️ 視界切替: Vキーまたは画面タップ</p>
-          </div>
-        </div>
-      )}
-      
-      {showRetireConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-          <div className="bg-gray-900 p-6 rounded-lg border-4 border-red-600 max-w-md">
-            <h2 className="text-2xl font-bold mb-4 text-center text-red-400">リタイアしますか？</h2>
-            <p className="text-sm mb-6 text-center text-gray-300">ゲームを中断してメニューに戻ります</p>
-            <div className="flex gap-4">
-              <button
-                onClick={cancelRetire}
-                className="flex-1 px-6 py-3 rounded-lg font-bold bg-gray-700 hover:bg-gray-600 border-2 border-gray-600"
-              >
-                いいえ
-              </button>
-              <button
-                onClick={confirmRetire}
-                className="flex-1 px-6 py-3 rounded-lg font-bold bg-red-600 hover:bg-red-700 border-2 border-red-500"
-              >
-                はい
-              </button>
-            </div>
+            <p style={{color: '#888'}}>🚪 リタイア: Escキー / プラス+マイナス同時押し | 👁️ 視界切替: Vキーまたは画面タップ</p>
           </div>
         </div>
       )}
@@ -1079,16 +1046,17 @@ const MazeBattleGame = () => {
       {gameState === 'finished' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.5.15</div>
+            <div className="text-xs text-gray-400">v0.5.16</div>
           </div>
+          
           <canvas
             ref={canvasRef}
             width={canvasSize.width}
             height={canvasSize.height}
-            className="rounded opacity-30"
+            className="rounded mb-4"
           />
           
-          <div className="mt-4 bg-gray-900 p-6 rounded-lg border-4 border-yellow-600 shadow-2xl">
+          <div className="bg-gray-900 p-6 rounded-lg border-4 border-yellow-600 shadow-2xl">
             <h1 className="text-4xl font-bold mb-4 text-center" style={{
               color: winner === 1 ? '#FF6B6B' : '#6B9BFF',
               textShadow: '3px 3px 0 #000'
