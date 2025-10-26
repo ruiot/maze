@@ -15,10 +15,24 @@
 <body>
   <div id="root"></div>
   <script>
-    // URLパラメータから ?script=xxx.js を取得
-    const params = new URLSearchParams(window.location.search);
-    const scriptName = params.get("script") || "game.js"; // デフォルト main.js
+  // クエリパラメータを取得
+  const params = new URLSearchParams(window.location.search);
 
+  // ?debug=1 または ?debug=true ならオン
+  const debugMode = params.get('debug') === '1' || params.get('debug') === 'true';
+
+  if (debugMode) {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/eruda';
+    script.onload = () => {
+      eruda.init();
+      eruda.position({ x: window.innerWidth - 50, y: window.innerHeight - 100 });
+    };
+    document.body.appendChild(script);
+  }
+  
+    // URLパラメータから ?script=xxx.js を取得
+    const scriptName = params.get("script") || "game.js"; // デフォルト main.js
 
     // Preprocess game.js: convert import/export to React globals
     (async () => {
