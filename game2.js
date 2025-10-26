@@ -932,35 +932,35 @@ const MazeBattleGame = () => {
         const eyeSize = 3;
         const eyeOffset = cellSize / 4;
         
-        // delete const to avoid error
+        // rename centerX/centerY to avoid error
         // const centerX = playerScreenX + cellSize / 2;
         // const centerY = playerScreenY + cellSize / 2;
-        centerX = playerScreenX + cellSize / 2;
-        centerY = playerScreenY + cellSize / 2;
+        const centerX_ = playerScreenX + cellSize / 2;
+        const centerY_ = playerScreenY + cellSize / 2;
         
         let eye1X, eye1Y, eye2X, eye2Y;
         const { dx, dy } = player.direction;
         
         if (dx === 1 && dy === 0) {
-          eye1X = centerX + eyeOffset;
-          eye1Y = centerY - eyeSize;
-          eye2X = centerX + eyeOffset;
-          eye2Y = centerY + eyeSize;
+          eye1X = centerX_ + eyeOffset;
+          eye1Y = centerY_ - eyeSize;
+          eye2X = centerX_ + eyeOffset;
+          eye2Y = centerY_ + eyeSize;
         } else if (dx === -1 && dy === 0) {
-          eye1X = centerX - eyeOffset;
-          eye1Y = centerY - eyeSize;
-          eye2X = centerX - eyeOffset;
-          eye2Y = centerY + eyeSize;
+          eye1X = centerX_ - eyeOffset;
+          eye1Y = centerY_ - eyeSize;
+          eye2X = centerX_ - eyeOffset;
+          eye2Y = centerY_ + eyeSize;
         } else if (dx === 0 && dy === -1) {
-          eye1X = centerX - eyeSize;
-          eye1Y = centerY - eyeOffset;
-          eye2X = centerX + eyeSize;
-          eye2Y = centerY - eyeOffset;
+          eye1X = centerX_ - eyeSize;
+          eye1Y = centerY_ - eyeOffset;
+          eye2X = centerX_ + eyeSize;
+          eye2Y = centerY_ - eyeOffset;
         } else if (dx === 0 && dy === 1) {
-          eye1X = centerX - eyeSize;
-          eye1Y = centerY + eyeOffset;
-          eye2X = centerX + eyeSize;
-          eye2Y = centerY + eyeOffset;
+          eye1X = centerX_ - eyeSize;
+          eye1Y = centerY_ + eyeOffset;
+          eye2X = centerX_ + eyeSize;
+          eye2Y = centerY_ + eyeOffset;
         }
         
         ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
