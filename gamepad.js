@@ -60,4 +60,4 @@ const GamepadViewer = () => {
   );
 }
 
-export default MazeBattleGame;
+export default GamepadViewer;
