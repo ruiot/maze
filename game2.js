@@ -932,8 +932,11 @@ const MazeBattleGame = () => {
         const eyeSize = 3;
         const eyeOffset = cellSize / 4;
         
-        const centerX = playerScreenX + cellSize / 2;
-        const centerY = playerScreenY + cellSize / 2;
+        // delete const to avoid error
+        // const centerX = playerScreenX + cellSize / 2;
+        // const centerY = playerScreenY + cellSize / 2;
+        centerX = playerScreenX + cellSize / 2;
+        centerY = playerScreenY + cellSize / 2;
         
         let eye1X, eye1Y, eye2X, eye2Y;
         const { dx, dy } = player.direction;
