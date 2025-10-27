@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<body>
+<pre id="out"></pre>
+<script>
+function rng(seed) {
+  // シンプルな固定乱数ジェネレータ（Xorshift）
+  let x = seed || 123456789;
+  return function() {
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    return (x < 0 ? ~x + 1 : x) / 0x7fffffff;
+  };
+}
+
+function makeMaze(width, height, seed, startX, startY) {
+  const rnd = rng(seed);
+  const maze = Array.from({ length: height }, () =>
+    Array.from({ length: width }, () => 0)
+  );
+  const stack = [[startX, startY]];
+  const dirs = [
+    [0, -1], [1, 0], [0, 1], [-1, 0]
+  ];
+
+  maze[startY][startX] = 1; // visited
+
+  while (stack.length) {
+    const [x, y] = stack[stack.length - 1];
+    const neighbors = dirs
+      .map(([dx, dy]) => [x + dx * 2, y + dy * 2, dx, dy])
+      .filter(([nx, ny]) =>
+        nx > 0 && ny > 0 && nx < width - 1 && ny < height - 1 &&
+        maze[ny][nx] === 0
+      );
+
+    if (neighbors.length === 0) {
+      stack.pop();
+    } else {
+      const [nx, ny, dx, dy] = neighbors[Math.floor(rnd() * neighbors.length)];
+      maze[y + dy][x + dx] = 1;
+      maze[ny][nx] = 1;
+      stack.push([nx, ny]);
+    }
+  }
+  return maze;
+}
+
+function drawMaze(maze) {
+  return maze.map(row => row.map(c => (c ? "  " : "██")).join("")).join("\n");
+}
+
+// 比較テスト
+const width = 21, height = 21, seed = 42;
+const starts = [
+  [1, 1],
+  [width - 2, height - 2],
+  [Math.floor(width / 2), Math.floor(height / 2)]
+];
+
+let out = "";
+for (const [sx, sy] of starts) {
+  const m = makeMaze(width, height, seed, sx, sy);
+  out += `Start: (${sx},${sy})\n`;
+  out += drawMaze(m) + "\n\n";
+}
+document.getElementById("out").textContent = out;
+</script>
+</body>
+</html>
