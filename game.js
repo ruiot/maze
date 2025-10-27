@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.6.1: Fix wall break debounce, add input detection display, simplify retire and joy-con mapping
-// Commit: Fix wall break debounce, add input detection display, simplify retire and joy-con mapping
+// v0.7.0-alpha: Add ranking system, dynamic visibility with fixed center layout, randomize maze start
+// Commit: Add rankings, dynamic visibility with fixed center, randomize maze start
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -11,6 +11,7 @@ const MazeBattleGame = () => {
   
   // Structured player data
   const [players, setPlayers] = useState([]);
+  const [rankings, setRankings] = useState([]); // NEW: Track finish order [playerId1, playerId2, ...]
   const [winner, setWinner] = useState(null);
   const [brokenWalls, setBrokenWalls] = useState(new Set());
   const [particles, setParticles] = useState([]);
@@ -29,7 +30,6 @@ const MazeBattleGame = () => {
   const audioContextRef = useRef(null);
   const lastButtonStateRef = useRef({});
 
-  const VISIBILITY = 5;
   const MOVE_DELAY = 300;
   const VIEW_MODE_TOGGLE_DELAY = 200;
 
@@ -132,9 +132,17 @@ const MazeBattleGame = () => {
   const generateMaze = (size) => {
     const maze = Array(size).fill().map(() => Array(size).fill(1));
     
+    // NEW: Randomize start position (must be odd coordinates)
+    const oddCoords = [];
+    for (let i = 1; i < size - 1; i += 2) {
+      for (let j = 1; j < size - 1; j += 2) {
+        oddCoords.push([i, j]);
+      }
+    }
+    const randomStart = oddCoords[Math.floor(Math.random() * oddCoords.length)];
+    const [startX, startY] = randomStart;
+    
     const stack = [];
-    const startX = 1;
-    const startY = 1;
     maze[startY][startX] = 0;
     stack.push([startX, startY]);
 
@@ -178,6 +186,7 @@ const MazeBattleGame = () => {
       footprintPath: [{ x: config.startX, y: config.startY }],
       wallBreaks: 3,
       visitedBases: {},
+      visibility: 5, // NEW: Dynamic visibility per player
       color: config.color,
       emoji: config.emoji,
       keys: config.keys,
@@ -222,6 +231,7 @@ const MazeBattleGame = () => {
     
     setBrokenWalls(new Set());
     setParticles([]);
+    setRankings([]); // NEW: Reset rankings
     setWinner(null);
     setDebugMessages([]);
     setGameState('playing');
@@ -260,6 +270,10 @@ const MazeBattleGame = () => {
       if (playerIndex === -1) return prevPlayers;
       
       const player = prevPlayers[playerIndex];
+      
+      // NEW: Don't move if player has already won
+      if (player.hasWon) return prevPlayers;
+      
       const newX = player.x + dx;
       const newY = player.y + dy;
 
@@ -287,12 +301,25 @@ const MazeBattleGame = () => {
       // Check victory condition
       if (checkVictoryCondition(newPlayers[playerIndex]) && !player.hasWon) {
         newPlayers[playerIndex].hasWon = true;
-        setWinner(playerId);
-        setViewMode('overview');
-        setGameState('finished');
-        setPressedKeys(new Set());
-        setTouchHolding({});
-        addDebugLog(`Player ${playerId} wins!`);
+        
+        // NEW: Add to rankings
+        setRankings(prev => {
+          const newRankings = [...prev, playerId];
+          
+          // Check if all players have finished
+          if (newRankings.length === gameMode) {
+            setWinner(newRankings[0]); // First place
+            setViewMode('overview');
+            setGameState('finished');
+            setPressedKeys(new Set());
+            setTouchHolding({});
+            addDebugLog(`All players finished! Winner: Player ${newRankings[0]}`);
+          } else {
+            addDebugLog(`Player ${playerId} finished! Rank ${newRankings.length}`);
+          }
+          
+          return newRankings;
+        });
       }
       
       // Update last move time
@@ -330,7 +357,11 @@ const MazeBattleGame = () => {
 
     setPlayers(prevPlayers => 
       prevPlayers.map(p => 
-        p.id === playerId ? { ...p, wallBreaks: p.wallBreaks - 1 } : p
+        p.id === playerId ? { 
+          ...p, 
+          wallBreaks: p.wallBreaks - 1,
+          visibility: Math.max(2, p.visibility - 1) // NEW: Reduce visibility (min 2)
+        } : p
       )
     );
 
@@ -351,6 +382,8 @@ const MazeBattleGame = () => {
       });
     }
     setParticles(prev => [...prev, ...newParticles]);
+    
+    addDebugLog(`Player ${playerId} visibility now: ${Math.max(2, player.visibility - 1)}`);
   };
 
   const handleRetire = () => {
@@ -460,6 +493,8 @@ const MazeBattleGame = () => {
 
       // Keyboard input for all players
       players.forEach(player => {
+        if (player.hasWon) return; // Skip if already won
+        
         const timingKey = `p${player.id}`;
         if (now - lastMoveRef.current[timingKey] >= MOVE_DELAY) {
           pressedKeys.forEach(key => {
@@ -478,6 +513,8 @@ const MazeBattleGame = () => {
 
       // Touch input for all players
       players.forEach(player => {
+        if (player.hasWon) return; // Skip if already won
+        
         const holdingKey = `p${player.id}`;
         const timingKey = `p${player.id}`;
         if (touchHolding[holdingKey] && now - lastMoveRef.current[timingKey] >= MOVE_DELAY) {
@@ -492,57 +529,64 @@ const MazeBattleGame = () => {
         const threshold = 0.5;
         
         // Player 1 - Left stick/D-pad
-        const axes01 = [gp.axes[0] || 0, gp.axes[1] || 0];
-        if ((Math.abs(axes01[0]) > threshold || Math.abs(axes01[1]) > threshold) && 
-            now - lastMoveRef.current.p1 >= MOVE_DELAY) {
-          const dx = Math.abs(axes01[0]) > Math.abs(axes01[1]) ? (axes01[0] > 0 ? 1 : -1) : 0;
-          const dy = Math.abs(axes01[1]) > Math.abs(axes01[0]) ? (axes01[1] > 0 ? 1 : -1) : 0;
-          movePlayer(1, dx, dy);
-        }
-        
-        // D-pad for Player 1
-        if (gp.buttons[12]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
-          movePlayer(1, 0, -1);
-        if (gp.buttons[13]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
-          movePlayer(1, 0, 1);
-        if (gp.buttons[14]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
-          movePlayer(1, -1, 0);
-        if (gp.buttons[15]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
-          movePlayer(1, 1, 0);
-
-        // Player 2 - Right stick/Face buttons  
-        if (gp.axes.length > 3) {
-          const axes23 = [gp.axes[2] || 0, gp.axes[3] || 0];
-          if ((Math.abs(axes23[0]) > threshold || Math.abs(axes23[1]) > threshold) &&
-              now - lastMoveRef.current.p2 >= MOVE_DELAY) {
-            const dx = Math.abs(axes23[0]) > Math.abs(axes23[1]) ? (axes23[0] > 0 ? 1 : -1) : 0;
-            const dy = Math.abs(axes23[1]) > Math.abs(axes23[0]) ? (axes23[1] > 0 ? 1 : -1) : 0;
-            movePlayer(2, dx, dy);
+        const p1 = players.find(p => p.id === 1);
+        if (p1 && !p1.hasWon) {
+          const axes01 = [gp.axes[0] || 0, gp.axes[1] || 0];
+          if ((Math.abs(axes01[0]) > threshold || Math.abs(axes01[1]) > threshold) && 
+              now - lastMoveRef.current.p1 >= MOVE_DELAY) {
+            const dx = Math.abs(axes01[0]) > Math.abs(axes01[1]) ? (axes01[0] > 0 ? 1 : -1) : 0;
+            const dy = Math.abs(axes01[1]) > Math.abs(axes01[0]) ? (axes01[1] > 0 ? 1 : -1) : 0;
+            movePlayer(1, dx, dy);
           }
-        }
-        
-        // Face buttons for Player 2
-        if (gp.buttons[0]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
-          movePlayer(2, 1, 0);
-        if (gp.buttons[1]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
-          movePlayer(2, 0, 1);
-        if (gp.buttons[2]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
-          movePlayer(2, 0, -1);
-        if (gp.buttons[3]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
-          movePlayer(2, -1, 0);
+          
+          // D-pad for Player 1
+          if (gp.buttons[12]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
+            movePlayer(1, 0, -1);
+          if (gp.buttons[13]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
+            movePlayer(1, 0, 1);
+          if (gp.buttons[14]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
+            movePlayer(1, -1, 0);
+          if (gp.buttons[15]?.pressed && now - lastMoveRef.current.p1 >= MOVE_DELAY) 
+            movePlayer(1, 1, 0);
 
-        // Wall breaks with debounce - not pressed → pressed transition detection
-        const p1BreakKey = 'gp0_p1_break';
-        if (gp.buttons[4]?.pressed && !lastButtonStateRef.current[p1BreakKey]) {
-          breakWall(1);
+          // Wall break with debounce
+          const p1BreakKey = 'gp0_p1_break';
+          if (gp.buttons[4]?.pressed && !lastButtonStateRef.current[p1BreakKey]) {
+            breakWall(1);
+          }
+          lastButtonStateRef.current[p1BreakKey] = gp.buttons[4]?.pressed;
         }
-        lastButtonStateRef.current[p1BreakKey] = gp.buttons[4]?.pressed;
 
-        const p2BreakKey = 'gp0_p2_break';
-        if (gp.buttons[5]?.pressed && !lastButtonStateRef.current[p2BreakKey]) {
-          breakWall(2);
+        // Player 2 - Right stick/Face buttons
+        const p2 = players.find(p => p.id === 2);
+        if (p2 && !p2.hasWon) {
+          if (gp.axes.length > 3) {
+            const axes23 = [gp.axes[2] || 0, gp.axes[3] || 0];
+            if ((Math.abs(axes23[0]) > threshold || Math.abs(axes23[1]) > threshold) &&
+                now - lastMoveRef.current.p2 >= MOVE_DELAY) {
+              const dx = Math.abs(axes23[0]) > Math.abs(axes23[1]) ? (axes23[0] > 0 ? 1 : -1) : 0;
+              const dy = Math.abs(axes23[1]) > Math.abs(axes23[0]) ? (axes23[1] > 0 ? 1 : -1) : 0;
+              movePlayer(2, dx, dy);
+            }
+          }
+          
+          // Face buttons for Player 2
+          if (gp.buttons[0]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
+            movePlayer(2, 1, 0);
+          if (gp.buttons[1]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
+            movePlayer(2, 0, 1);
+          if (gp.buttons[2]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
+            movePlayer(2, 0, -1);
+          if (gp.buttons[3]?.pressed && now - lastMoveRef.current.p2 >= MOVE_DELAY) 
+            movePlayer(2, -1, 0);
+
+          // Wall break with debounce
+          const p2BreakKey = 'gp0_p2_break';
+          if (gp.buttons[5]?.pressed && !lastButtonStateRef.current[p2BreakKey]) {
+            breakWall(2);
+          }
+          lastButtonStateRef.current[p2BreakKey] = gp.buttons[5]?.pressed;
         }
-        lastButtonStateRef.current[p2BreakKey] = gp.buttons[5]?.pressed;
         
         // Retire - + and - simultaneously
         if (gp.buttons[8]?.pressed && gp.buttons[9]?.pressed) {
@@ -554,32 +598,35 @@ const MazeBattleGame = () => {
       if (gamepads[1] && gameMode === 3) {
         const gp = gamepads[1];
         const threshold = 0.5;
+        const p3 = players.find(p => p.id === 3);
         
-        // Left stick
-        const axes = [gp.axes[0] || 0, gp.axes[1] || 0];
-        if ((Math.abs(axes[0]) > threshold || Math.abs(axes[1]) > threshold) &&
-            now - lastMoveRef.current.p3 >= MOVE_DELAY) {
-          const dx = Math.abs(axes[0]) > Math.abs(axes[1]) ? (axes[0] > 0 ? 1 : -1) : 0;
-          const dy = Math.abs(axes[1]) > Math.abs(axes[0]) ? (axes[1] > 0 ? 1 : -1) : 0;
-          movePlayer(3, dx, dy);
+        if (p3 && !p3.hasWon) {
+          // Left stick
+          const axes = [gp.axes[0] || 0, gp.axes[1] || 0];
+          if ((Math.abs(axes[0]) > threshold || Math.abs(axes[1]) > threshold) &&
+              now - lastMoveRef.current.p3 >= MOVE_DELAY) {
+            const dx = Math.abs(axes[0]) > Math.abs(axes[1]) ? (axes[0] > 0 ? 1 : -1) : 0;
+            const dy = Math.abs(axes[1]) > Math.abs(axes[0]) ? (axes[1] > 0 ? 1 : -1) : 0;
+            movePlayer(3, dx, dy);
+          }
+          
+          // D-pad
+          if (gp.buttons[12]?.pressed && now - lastMoveRef.current.p3 >= MOVE_DELAY) 
+            movePlayer(3, 0, -1);
+          if (gp.buttons[13]?.pressed && now - lastMoveRef.current.p3 >= MOVE_DELAY) 
+            movePlayer(3, 0, 1);
+          if (gp.buttons[14]?.pressed && now - lastMoveRef.current.p3 >= MOVE_DELAY) 
+            movePlayer(3, -1, 0);
+          if (gp.buttons[15]?.pressed && now - lastMoveRef.current.p3 >= MOVE_DELAY) 
+            movePlayer(3, 1, 0);
+          
+          // Wall break with debounce
+          const p3BreakKey = 'gp1_p3_break';
+          if (gp.buttons[4]?.pressed && !lastButtonStateRef.current[p3BreakKey]) {
+            breakWall(3);
+          }
+          lastButtonStateRef.current[p3BreakKey] = gp.buttons[4]?.pressed;
         }
-        
-        // D-pad
-        if (gp.buttons[12]?.pressed && now - lastMoveRef.current.p3 >= MOVE_DELAY) 
-          movePlayer(3, 0, -1);
-        if (gp.buttons[13]?.pressed && now - lastMoveRef.current.p3 >= MOVE_DELAY) 
-          movePlayer(3, 0, 1);
-        if (gp.buttons[14]?.pressed && now - lastMoveRef.current.p3 >= MOVE_DELAY) 
-          movePlayer(3, -1, 0);
-        if (gp.buttons[15]?.pressed && now - lastMoveRef.current.p3 >= MOVE_DELAY) 
-          movePlayer(3, 1, 0);
-        
-        // Wall break with debounce
-        const p3BreakKey = 'gp1_p3_break';
-        if (gp.buttons[4]?.pressed && !lastButtonStateRef.current[p3BreakKey]) {
-          breakWall(3);
-        }
-        lastButtonStateRef.current[p3BreakKey] = gp.buttons[4]?.pressed;
         
         // Debug info for Player 3 gamepad
         let gpInfo = `[GP1/P3] ${gp.id.substring(0, 20)}`;
@@ -603,19 +650,31 @@ const MazeBattleGame = () => {
 
   // Keyboard event handlers
   useEffect(() => {
-    if (gameState === 'menu' || gameState === 'finished') {
+    if (gameState === 'menu') {
       const handleMenuKey = (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          if (gameState === 'finished') {
-            setGameState('menu');
-          } else {
-            startGame();
-          }
+          startGame();
         }
       };
       window.addEventListener('keydown', handleMenuKey, true);
       return () => window.removeEventListener('keydown', handleMenuKey, true);
+    }
+    
+    if (gameState === 'finished') {
+      const handleFinishedKey = (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          setGameState('menu');
+        }
+        // NEW: Allow view mode toggle in finished state
+        if (e.key === 'v' || e.key === 'V') {
+          cycleViewMode();
+          e.preventDefault();
+        }
+      };
+      window.addEventListener('keydown', handleFinishedKey, true);
+      return () => window.removeEventListener('keydown', handleFinishedKey, true);
     }
 
     if (gameState !== 'playing') return;
@@ -688,7 +747,7 @@ const MazeBattleGame = () => {
 
   // Canvas rendering
   useEffect(() => {
-    if (gameState !== 'playing' || !canvasRef.current) return;
+    if ((gameState !== 'playing' && gameState !== 'finished') || !canvasRef.current) return;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
@@ -824,18 +883,20 @@ const MazeBattleGame = () => {
       
     } else {
       // Circle view mode
-      const viewWidth = (VISIBILITY * 2 + 1) * cellSize;
+      const MAX_VISIBILITY = 5; // Fixed layout based on max visibility
+      const fixedViewWidth = (MAX_VISIBILITY * 2 + 1) * cellSize;
       const margin = 30;
       
       players.forEach((player, index) => {
-        const offsetX = index * (viewWidth + margin);
+        const VISIBILITY = player.visibility; // NEW: Use player's dynamic visibility
+        
+        // Calculate fixed center position
+        const centerX = index * (fixedViewWidth + margin) + (MAX_VISIBILITY * cellSize) + cellSize / 2;
+        const centerY = (MAX_VISIBILITY * cellSize) + cellSize / 2;
+        const radius = VISIBILITY * cellSize + cellSize / 2;
         
         // Set up circular clipping
         ctx.save();
-        const centerX = offsetX + (VISIBILITY * cellSize) + cellSize / 2;
-        const centerY = (VISIBILITY * cellSize) + cellSize / 2;
-        const radius = VISIBILITY * cellSize + cellSize / 2;
-        
         ctx.beginPath();
         ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
         ctx.clip();
@@ -846,8 +907,9 @@ const MazeBattleGame = () => {
             const x = player.x + dx;
             const y = player.y + dy;
 
-            const screenX = offsetX + (dx + VISIBILITY) * cellSize;
-            const screenY = (dy + VISIBILITY) * cellSize;
+            // Position relative to fixed center
+            const screenX = centerX + (dx * cellSize) - cellSize / 2;
+            const screenY = centerY + (dy * cellSize) - cellSize / 2;
 
             const isOutOfBounds = x < 0 || x >= mazeSize || y < 0 || y >= mazeSize;
             const isWall = isOutOfBounds || maze[y][x] === 1;
@@ -910,10 +972,10 @@ const MazeBattleGame = () => {
             if (Math.abs(dx0) <= VISIBILITY && Math.abs(dy0) <= VISIBILITY &&
                 Math.abs(dx1) <= VISIBILITY && Math.abs(dy1) <= VISIBILITY) {
               
-              const screenX0 = offsetX + (dx0 + VISIBILITY) * cellSize + cellSize / 2;
-              const screenY0 = (dy0 + VISIBILITY) * cellSize + cellSize / 2;
-              const screenX1 = offsetX + (dx1 + VISIBILITY) * cellSize + cellSize / 2;
-              const screenY1 = (dy1 + VISIBILITY) * cellSize + cellSize / 2;
+              const screenX0 = centerX + (dx0 * cellSize);
+              const screenY0 = centerY + (dy0 * cellSize);
+              const screenX1 = centerX + (dx1 * cellSize);
+              const screenY1 = centerY + (dy1 * cellSize);
               
               const alpha = 0.2 + (i / trailPlayer.footprintPath.length) * 0.5;
               const baseWidth = 4;
@@ -943,12 +1005,12 @@ const MazeBattleGame = () => {
           const otherDy = otherPlayer.y - player.y;
           
           if (Math.abs(otherDx) <= VISIBILITY && Math.abs(otherDy) <= VISIBILITY) {
-            const otherScreenX = offsetX + (otherDx + VISIBILITY) * cellSize;
-            const otherScreenY = (otherDy + VISIBILITY) * cellSize;
+            const otherScreenX = centerX + (otherDx * cellSize);
+            const otherScreenY = centerY + (otherDy * cellSize);
             
             ctx.fillStyle = otherPlayer.color;
             ctx.beginPath();
-            ctx.arc(otherScreenX + cellSize / 2, otherScreenY + cellSize / 2 + 2, cellSize / 2.5, 0, Math.PI * 2);
+            ctx.arc(otherScreenX, otherScreenY + 2, cellSize / 2.5, 0, Math.PI * 2);
             ctx.fill();
             
             // Draw eyes for other player
@@ -956,32 +1018,29 @@ const MazeBattleGame = () => {
             const eyeSize = 3;
             const eyeOffset = cellSize / 4;
             
-            const otherCenterX = otherScreenX + cellSize / 2;
-            const otherCenterY = otherScreenY + cellSize / 2;
-            
             let oeye1X, oeye1Y, oeye2X, oeye2Y;
             const { dx, dy } = otherPlayer.direction;
             
             if (dx === 1 && dy === 0) {
-              oeye1X = otherCenterX + eyeOffset;
-              oeye1Y = otherCenterY - eyeSize;
-              oeye2X = otherCenterX + eyeOffset;
-              oeye2Y = otherCenterY + eyeSize;
+              oeye1X = otherScreenX + eyeOffset;
+              oeye1Y = otherScreenY - eyeSize;
+              oeye2X = otherScreenX + eyeOffset;
+              oeye2Y = otherScreenY + eyeSize;
             } else if (dx === -1 && dy === 0) {
-              oeye1X = otherCenterX - eyeOffset;
-              oeye1Y = otherCenterY - eyeSize;
-              oeye2X = otherCenterX - eyeOffset;
-              oeye2Y = otherCenterY + eyeSize;
+              oeye1X = otherScreenX - eyeOffset;
+              oeye1Y = otherScreenY - eyeSize;
+              oeye2X = otherScreenX - eyeOffset;
+              oeye2Y = otherScreenY + eyeSize;
             } else if (dx === 0 && dy === -1) {
-              oeye1X = otherCenterX - eyeSize;
-              oeye1Y = otherCenterY - eyeOffset;
-              oeye2X = otherCenterX + eyeSize;
-              oeye2Y = otherCenterY - eyeOffset;
+              oeye1X = otherScreenX - eyeSize;
+              oeye1Y = otherScreenY - eyeOffset;
+              oeye2X = otherScreenX + eyeSize;
+              oeye2Y = otherScreenY - eyeOffset;
             } else if (dx === 0 && dy === 1) {
-              oeye1X = otherCenterX - eyeSize;
-              oeye1Y = otherCenterY + eyeOffset;
-              oeye2X = otherCenterX + eyeSize;
-              oeye2Y = otherCenterY + eyeOffset;
+              oeye1X = otherScreenX - eyeSize;
+              oeye1Y = otherScreenY + eyeOffset;
+              oeye2X = otherScreenX + eyeSize;
+              oeye2Y = otherScreenY + eyeOffset;
             }
             
             ctx.fillRect(oeye1X - eyeSize / 2, oeye1Y - eyeSize / 2, eyeSize, eyeSize);
@@ -990,12 +1049,9 @@ const MazeBattleGame = () => {
         });
 
         // Draw current player
-        const playerScreenX = offsetX + VISIBILITY * cellSize;
-        const playerScreenY = VISIBILITY * cellSize;
-        
         ctx.fillStyle = player.color;
         ctx.beginPath();
-        ctx.arc(playerScreenX + cellSize / 2, playerScreenY + cellSize / 2 + 2, cellSize / 2.5, 0, Math.PI * 2);
+        ctx.arc(centerX, centerY + 2, cellSize / 2.5, 0, Math.PI * 2);
         ctx.fill();
         
         // Draw player eyes
@@ -1003,32 +1059,29 @@ const MazeBattleGame = () => {
         const eyeSize = 3;
         const eyeOffset = cellSize / 4;
         
-        const centerX_ = playerScreenX + cellSize / 2;
-        const centerY_ = playerScreenY + cellSize / 2;
-        
         let eye1X, eye1Y, eye2X, eye2Y;
         const { dx, dy } = player.direction;
         
         if (dx === 1 && dy === 0) {
-          eye1X = centerX_ + eyeOffset;
-          eye1Y = centerY_ - eyeSize;
-          eye2X = centerX_ + eyeOffset;
-          eye2Y = centerY_ + eyeSize;
+          eye1X = centerX + eyeOffset;
+          eye1Y = centerY - eyeSize;
+          eye2X = centerX + eyeOffset;
+          eye2Y = centerY + eyeSize;
         } else if (dx === -1 && dy === 0) {
-          eye1X = centerX_ - eyeOffset;
-          eye1Y = centerY_ - eyeSize;
-          eye2X = centerX_ - eyeOffset;
-          eye2Y = centerY_ + eyeSize;
+          eye1X = centerX - eyeOffset;
+          eye1Y = centerY - eyeSize;
+          eye2X = centerX - eyeOffset;
+          eye2Y = centerY + eyeSize;
         } else if (dx === 0 && dy === -1) {
-          eye1X = centerX_ - eyeSize;
-          eye1Y = centerY_ - eyeOffset;
-          eye2X = centerX_ + eyeSize;
-          eye2Y = centerY_ - eyeOffset;
+          eye1X = centerX - eyeSize;
+          eye1Y = centerY - eyeOffset;
+          eye2X = centerX + eyeSize;
+          eye2Y = centerY - eyeOffset;
         } else if (dx === 0 && dy === 1) {
-          eye1X = centerX_ - eyeSize;
-          eye1Y = centerY_ + eyeOffset;
-          eye2X = centerX_ + eyeSize;
-          eye2Y = centerY_ + eyeOffset;
+          eye1X = centerX - eyeSize;
+          eye1Y = centerY + eyeOffset;
+          eye2X = centerX + eyeSize;
+          eye2Y = centerY + eyeOffset;
         }
         
         ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
@@ -1054,17 +1107,20 @@ const MazeBattleGame = () => {
         ctx.arc(screenX, screenY, 2, 0, Math.PI * 2);
         ctx.fill();
       } else {
-        const viewWidth = (VISIBILITY * 2 + 1) * cellSize;
+        const MAX_VISIBILITY = 5;
+        const fixedViewWidth = (MAX_VISIBILITY * 2 + 1) * cellSize;
         const margin = 30;
         
         players.forEach((viewPlayer, index) => {
+          const VISIBILITY = viewPlayer.visibility;
           const dx = p.x - viewPlayer.x;
           const dy = p.y - viewPlayer.y;
           
           if (Math.abs(dx) <= VISIBILITY && Math.abs(dy) <= VISIBILITY) {
-            const offsetX = index * (viewWidth + margin);
-            const screenX = offsetX + (dx + VISIBILITY) * cellSize + p.vx * 2;
-            const screenY = (dy + VISIBILITY) * cellSize + p.vy * 2;
+            const centerX = index * (fixedViewWidth + margin) + (MAX_VISIBILITY * cellSize) + cellSize / 2;
+            const centerY = (MAX_VISIBILITY * cellSize) + cellSize / 2;
+            const screenX = centerX + (dx * cellSize) + p.vx * 2;
+            const screenY = centerY + (dy * cellSize) + p.vy * 2;
             
             ctx.fillStyle = player.color + Math.floor((p.life / 30) * 255).toString(16).padStart(2, '0');
             ctx.beginPath();
@@ -1088,11 +1144,15 @@ const MazeBattleGame = () => {
       const size = mazeSize * miniCellSize;
       return { width: size, height: size };
     } else {
-      const viewWidth = (VISIBILITY * 2 + 1) * cellSize;
-      const totalWidth = players.length * viewWidth + (players.length - 1) * 30;
+      const MAX_VISIBILITY = 5;
+      const fixedViewWidth = (MAX_VISIBILITY * 2 + 1) * cellSize;
+      const fixedViewHeight = (MAX_VISIBILITY * 2 + 1) * cellSize;
+      const margin = 30;
+      const totalWidth = players.length * fixedViewWidth + (players.length - 1) * margin;
+      
       return {
         width: totalWidth,
-        height: (VISIBILITY * 2 + 1) * cellSize
+        height: fixedViewHeight
       };
     }
   };
@@ -1223,6 +1283,11 @@ const MazeBattleGame = () => {
           </button>
         ))}
       </div>
+      
+      {/* NEW: Visibility indicator */}
+      <div className="text-xs text-gray-400">
+        視界: {player.visibility}
+      </div>
     </div>
   );
 
@@ -1238,7 +1303,7 @@ const MazeBattleGame = () => {
     <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
       {gameState === 'menu' && (
         <div className="text-center">
-          <div className="text-xs mb-2 text-gray-400">v0.6.1</div>
+          <div className="text-xs mb-2 text-gray-400">v0.7.0-alpha</div>
           <h1 className="text-5xl font-bold mb-6" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
             迷路バトル
           </h1>
@@ -1348,6 +1413,8 @@ const MazeBattleGame = () => {
             <h2 className="text-xl font-bold mb-3" style={{color: '#FFD700'}}>ルール:</h2>
             <ul className="space-y-2 text-sm">
               <li>🎯 <b>勝利条件</b>: 全相手陣地を訪問→自陣に戻る</li>
+              <li>🏆 <b>NEW</b>: 3人プレイは順位付き（1位、2位、3位）</li>
+              <li>👁️ <b>NEW</b>: 壁破壊で視界縮小（5→2、円の中心固定）</li>
               <li>🔴 Player 1: 左上スタート (WASD + E)</li>
               <li>🔵 Player 2: 右下スタート (IJKL + U)</li>
               {gameMode === 3 && <li>🟡 Player 3: 右上スタート (矢印 + Shift)</li>}
@@ -1355,8 +1422,8 @@ const MazeBattleGame = () => {
               <li>🎮 Joy-Con: P1/P2は1台目、P3は2台目</li>
               <li>💣 壁破壊: 各プレイヤー3回まで</li>
               <li>🚪 リタイア: Escキー / Joy-Con +と-同時</li>
-              <li>👁️ 視界切替: Vキーまたは画面タップ</li>
-              <li>🗺️ 迷路サイズ: 31×31</li>
+              <li>👁️ 視界切替: Vキー（ゲーム中・終了後も可）</li>
+              <li>🗺️ 迷路: 31×31、始点ランダム、毎回違う形</li>
             </ul>
           </div>
         </div>
@@ -1365,7 +1432,7 @@ const MazeBattleGame = () => {
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.6.1</div>
+            <div className="text-xs text-gray-400">v0.7.0-alpha</div>
             <button
               onClick={cycleViewMode}
               className="text-sm px-3 py-1 rounded transition-all bg-blue-600 hover:bg-blue-700 active:bg-blue-800 border border-yellow-500"
@@ -1377,6 +1444,20 @@ const MazeBattleGame = () => {
               31×31 | {gameMode}P
             </div>
           </div>
+          
+          {/* Rankings display (NEW) */}
+          {rankings.length > 0 && (
+            <div className="text-sm mb-2 bg-gray-900 px-4 py-2 rounded border border-yellow-500">
+              {rankings.map((playerId, index) => {
+                const player = PLAYER_CONFIGS.find(p => p.id === playerId);
+                return (
+                  <span key={playerId} className="mr-3" style={{ color: player.color }}>
+                    {index + 1}位: {player.emoji}
+                  </span>
+                );
+              })}
+            </div>
+          )}
           
           {/* Debug info */}
           {debugMessages.length > 0 && (
@@ -1400,7 +1481,7 @@ const MazeBattleGame = () => {
           
           <div className="mt-4 text-center text-xs space-y-1 w-full max-w-4xl">
             <p style={{color: '#FF6B6B'}}>🔴 P1: WASD / 破壊: E</p>
-            <p style={{color: '#6B9BFF'}}>🔵 P2: IJKL / 破壊: U</p>
+            <p style={{color: '#6BB6FF'}}>🔵 P2: IJKL / 破壊: U</p>
             {gameMode === 3 && <p style={{color: '#FFD700'}}>🟡 P3: 矢印 / 破壊: Shift</p>}
             <p style={{color: '#888'}}>🚪 リタイア: Esc | 👁️ 視界切替: V</p>
           </div>
@@ -1410,13 +1491,21 @@ const MazeBattleGame = () => {
       {gameState === 'finished' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.6.1</div>
+            <div className="text-xs text-gray-400">v0.7.0-alpha</div>
+            {/* NEW: View toggle button in finished state */}
+            <button
+              onClick={cycleViewMode}
+              className="text-sm px-3 py-1 rounded transition-all bg-blue-600 hover:bg-blue-700 active:bg-blue-800 border border-yellow-500"
+              style={{ touchAction: 'manipulation' }}
+            >
+              {currentViewMode?.icon} {currentViewMode?.name}
+            </button>
           </div>
           <canvas
             ref={canvasRef}
             width={canvasSize.width}
             height={canvasSize.height}
-            className="rounded opacity-30"
+            className="rounded"
           />
           
           <div className="mt-4 bg-gray-900 p-6 rounded-lg border-4 border-yellow-600 shadow-2xl">
@@ -1428,6 +1517,21 @@ const MazeBattleGame = () => {
                 }}>
                   {PLAYER_CONFIGS[winner - 1].emoji} Player {winner} の勝利!
                 </h1>
+                {/* NEW: Show full rankings */}
+                {rankings.length > 1 && (
+                  <div className="text-center mb-4">
+                    <p className="text-lg font-bold mb-2" style={{color: '#FFD700'}}>最終順位</p>
+                    {rankings.map((playerId, index) => {
+                      const player = PLAYER_CONFIGS.find(p => p.id === playerId);
+                      const medals = ['🥇', '🥈', '🥉'];
+                      return (
+                        <p key={playerId} className="text-lg" style={{ color: player.color }}>
+                          {medals[index] || `${index + 1}位`} {player.emoji} Player {playerId}
+                        </p>
+                      );
+                    })}
+                  </div>
+                )}
                 <p className="text-sm text-center mb-4 text-gray-300">
                   全ての敵陣地を訪問して自陣に帰還しました!
                 </p>
