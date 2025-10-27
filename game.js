@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.7.0-alpha: Add ranking system, dynamic visibility with fixed center layout, randomize maze start
-// Commit: Add rankings, dynamic visibility with fixed center, randomize maze start
+// v0.7.0-alpha: Add rankings, dynamic visibility with fixed center, randomize maze start, optimize footprint rendering
+// Commit: Add rankings, dynamic visibility with fixed center, randomize maze, optimize footprint (100 steps)
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -815,7 +815,10 @@ const MazeBattleGame = () => {
       players.forEach(player => {
         if (player.footprintPath.length < 2) return;
         
-        for (let i = 0; i < player.footprintPath.length - 1; i++) {
+        // Limit to recent 100 steps for performance
+        const startIndex = Math.max(0, player.footprintPath.length - 100);
+        
+        for (let i = startIndex; i < player.footprintPath.length - 1; i++) {
           const p0 = player.footprintPath[i];
           const p1 = player.footprintPath[i + 1];
           
@@ -824,7 +827,7 @@ const MazeBattleGame = () => {
           const screenX1 = p1.x * miniCellSize + miniCellSize / 2;
           const screenY1 = p1.y * miniCellSize + miniCellSize / 2;
           
-          const alpha = 0.3 + (i / player.footprintPath.length) * 0.4;
+          const alpha = 0.3 + ((i - startIndex) / (player.footprintPath.length - startIndex)) * 0.4;
           ctx.strokeStyle = player.color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
           ctx.lineWidth = Math.max(2, miniCellSize / 6);
           ctx.lineCap = 'round';
@@ -960,7 +963,10 @@ const MazeBattleGame = () => {
         players.forEach(trailPlayer => {
           if (trailPlayer.footprintPath.length < 2) return;
           
-          for (let i = 0; i < trailPlayer.footprintPath.length - 1; i++) {
+          // Limit to recent 100 steps for performance
+          const startIndex = Math.max(0, trailPlayer.footprintPath.length - 100);
+          
+          for (let i = startIndex; i < trailPlayer.footprintPath.length - 1; i++) {
             const p0 = trailPlayer.footprintPath[i];
             const p1 = trailPlayer.footprintPath[i + 1];
             
@@ -977,7 +983,7 @@ const MazeBattleGame = () => {
               const screenX1 = centerX + (dx1 * cellSize);
               const screenY1 = centerY + (dy1 * cellSize);
               
-              const alpha = 0.2 + (i / trailPlayer.footprintPath.length) * 0.5;
+              const alpha = 0.2 + ((i - startIndex) / (trailPlayer.footprintPath.length - startIndex)) * 0.5;
               const baseWidth = 4;
               const wavyWidth = baseWidth + Math.sin(i * 0.3) * 1.5;
               
@@ -1284,9 +1290,10 @@ const MazeBattleGame = () => {
         ))}
       </div>
       
-      {/* NEW: Visibility indicator */}
-      <div className="text-xs text-gray-400">
-        視界: {player.visibility}
+      {/* Debug info: visibility and path length */}
+      <div className="text-xs text-gray-400 flex gap-3">
+        <span>視界: {player.visibility}</span>
+        <span>パス: {player.footprintPath.length}</span>
       </div>
     </div>
   );
