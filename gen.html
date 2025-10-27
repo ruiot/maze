@@ -1,28 +1,30 @@
 <!DOCTYPE html>
-<html>
-<body>
-<pre id="out"></pre>
+<html lang="ja">
+<body style="background:#222;color:#ccc;font-family:sans-serif;">
+<canvas id="maze"></canvas>
 <script>
 function rng(seed) {
-  // シンプルな固定乱数ジェネレータ（Xorshift）
-  let x = seed || 123456789;
+  // Xorshift系の固定乱数（シード指定可能）
+  let x = seed || Date.now() & 0xffffffff;
   return function() {
     x ^= x << 13; x ^= x >> 17; x ^= x << 5;
-    return (x < 0 ? ~x + 1 : x) / 0x7fffffff;
+    return (x >>> 0) / 0xffffffff;
   };
 }
 
-function makeMaze(width, height, seed, startX, startY) {
+function makeMaze(width, height, seed) {
   const rnd = rng(seed);
   const maze = Array.from({ length: height }, () =>
-    Array.from({ length: width }, () => 0)
+    Array(width).fill(0)
   );
-  const stack = [[startX, startY]];
-  const dirs = [
-    [0, -1], [1, 0], [0, 1], [-1, 0]
-  ];
 
-  maze[startY][startX] = 1; // visited
+  // スタート位置を中央に（奇数補正）
+  const sx = (Math.floor(width / 2) | 1);
+  const sy = (Math.floor(height / 2) | 1);
+
+  const stack = [[sx, sy]];
+  const dirs = [[0,-1],[1,0],[0,1],[-1,0]];
+  maze[sy][sx] = 1;
 
   while (stack.length) {
     const [x, y] = stack[stack.length - 1];
@@ -33,37 +35,46 @@ function makeMaze(width, height, seed, startX, startY) {
         maze[ny][nx] === 0
       );
 
-    if (neighbors.length === 0) {
+    if (!neighbors.length) {
       stack.pop();
-    } else {
-      const [nx, ny, dx, dy] = neighbors[Math.floor(rnd() * neighbors.length)];
-      maze[y + dy][x + dx] = 1;
-      maze[ny][nx] = 1;
-      stack.push([nx, ny]);
+      continue;
     }
+
+    const [nx, ny, dx, dy] = neighbors[Math.floor(rnd() * neighbors.length)];
+    maze[y + dy][x + dx] = 1; // 間の壁を壊す
+    maze[ny][nx] = 1;         // 次のセルを開ける
+    stack.push([nx, ny]);
   }
   return maze;
 }
 
-function drawMaze(maze) {
-  return maze.map(row => row.map(c => (c ? "  " : "██")).join("")).join("\n");
+function drawMaze(maze, scale=8) {
+  const canvas = document.getElementById("maze");
+  const ctx = canvas.getContext("2d");
+  const h = maze.length, w = maze[0].length;
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+
+  ctx.fillStyle = "#111";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (maze[y][x]) {
+        ctx.fillStyle = "#eee";
+        ctx.fillRect(x * scale, y * scale, scale, scale);
+      }
+    }
+  }
 }
 
-// 比較テスト
-const width = 21, height = 21, seed = 42;
-const starts = [
-  [1, 1],
-  [width - 2, height - 2],
-  [Math.floor(width / 2), Math.floor(height / 2)]
-];
+const width = 41, height = 41;
+// 実行ごとに変わるseed
+const seed = Math.floor(Math.random() * 1e9);
+console.log("Seed:", seed);
 
-let out = "";
-for (const [sx, sy] of starts) {
-  const m = makeMaze(width, height, seed, sx, sy);
-  out += `Start: (${sx},${sy})\n`;
-  out += drawMaze(m) + "\n\n";
-}
-document.getElementById("out").textContent = out;
+const maze = makeMaze(width, height, seed);
+drawMaze(maze, 8);
 </script>
 </body>
 </html>
