@@ -63,17 +63,18 @@ const mazes = [
   generateMaze(cols, rows, startCol, startRow, rnd3), // ランダム
 ];
 
-ctx.fillStyle = "black";
-ctx.fillRect(0, 0, canvas.width, canvas.height);
 ctx.fillStyle = "white";
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+ctx.fillStyle = "black";
 
-mazes.forEach((m, i) => drawMaze(ctx, m, i * (cols+1) * cellSize, cellSize));
+const gap = 3;
+mazes.forEach((m, i) => drawMaze(ctx, m, i * (cols+gap) * cellSize, cellSize));
 
 ctx.fillStyle = "red";
 ctx.font = "16px monospace";
 ctx.fillText("Left-Top", 10, rows*cellSize + 20);
-ctx.fillText("Center", (cols+1)*cellSize + 10, rows*cellSize + 20);
-ctx.fillText(`Random (${startCol}, ${startRow})`, (cols+1)*cellSize*2 + 10, rows*cellSize + 20);
+ctx.fillText("Center", (cols+gap)*cellSize + 10, rows*cellSize + 20);
+ctx.fillText(`Random (${startCol}, ${startRow})`, (cols+gap)*cellSize*2 + 10, rows*cellSize + 20);
 
 console.log("Seed:", seed);
 </script>
