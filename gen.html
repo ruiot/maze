@@ -49,29 +49,31 @@ function drawMaze(ctx, maze, offsetX, cellSize) {
 
 const canvas = document.getElementById('maze');
 const ctx = canvas.getContext('2d');
-const cols = 41, rows = 31, cellSize = 6;
+const cols = 43, rows = 43, cellSize = 6;
 const seed = Math.floor(Math.random() * 99999);
 const rnd1 = mulberry32(seed);
 const rnd2 = mulberry32(seed);
 const rnd3 = mulberry32(seed);
 
+const startCol = (Math.floor(Math.random()*((cols-2)/2))*2+1);
+const startRow = (Math.floor(Math.random()*((rows-2)/2))*2+1); 
 const mazes = [
   generateMaze(cols, rows, 1, 1, rnd1), // 左上
   generateMaze(cols, rows, Math.floor(cols/2)|1, Math.floor(rows/2)|1, rnd2), // 中央
-  generateMaze(cols, rows, (Math.floor(rnd3()*((cols-2)/2))*2+1), (Math.floor(rnd3()*((rows-2)/2))*2+1), rnd3), // ランダム
+  generateMaze(cols, rows, startCol, startRow, rnd3), // ランダム
 ];
 
 ctx.fillStyle = "black";
 ctx.fillRect(0, 0, canvas.width, canvas.height);
 ctx.fillStyle = "white";
 
-mazes.forEach((m, i) => drawMaze(ctx, m, i * cols * cellSize, cellSize));
+mazes.forEach((m, i) => drawMaze(ctx, m, i * (cols+1) * cellSize, cellSize));
 
 ctx.fillStyle = "red";
 ctx.font = "16px monospace";
 ctx.fillText("Left-Top", 10, rows*cellSize + 20);
-ctx.fillText("Center", cols*cellSize + 10, rows*cellSize + 20);
-ctx.fillText("Random", cols*cellSize*2 + 10, rows*cellSize + 20);
+ctx.fillText("Center", (cols+1)*cellSize + 10, rows*cellSize + 20);
+ctx.fillText(`Random (${startCol}, ${startRow})`, (cols+1)*cellSize*2 + 10, rows*cellSize + 20);
 
 console.log("Seed:", seed);
 </script>
