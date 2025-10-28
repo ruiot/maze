@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// v0.7.1: Fix requestAnimationFrame loop duplication by using refs
-// Commit: Fix RAF loop duplication, prevent crash by proper ref usage
+// v0.7.3: Fix menu input detection, add gamepad Plus button start, prevent pull-to-refresh
+// Commit: Fix menu keyboard detection, add Joy-Con Plus to start game, prevent Safari pull-to-refresh
 
 const MazeBattleGame = () => {
   const [gameState, setGameState] = useState('menu');
@@ -26,6 +26,7 @@ const MazeBattleGame = () => {
   
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
+  const renderLoopRef = useRef(null);
   const lastMoveRef = useRef({});
   const audioContextRef = useRef(null);
   const lastButtonStateRef = useRef({});
@@ -37,6 +38,10 @@ const MazeBattleGame = () => {
   const mazeRef = useRef([]);
   const mazeSizeRef = useRef(31);
   const gameModeRef = useRef(2);
+  const particlesRef = useRef([]);
+  const brokenWallsRef = useRef(new Set());
+  const viewModeRef = useRef('circle');
+  const cellSizeRef = useRef(18);
 
   const MOVE_DELAY = 300;
   const VIEW_MODE_TOGGLE_DELAY = 200;
@@ -106,6 +111,10 @@ const MazeBattleGame = () => {
   useEffect(() => { mazeRef.current = maze; }, [maze]);
   useEffect(() => { mazeSizeRef.current = mazeSize; }, [mazeSize]);
   useEffect(() => { gameModeRef.current = gameMode; }, [gameMode]);
+  useEffect(() => { particlesRef.current = particles; }, [particles]);
+  useEffect(() => { brokenWallsRef.current = brokenWalls; }, [brokenWalls]);
+  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+  useEffect(() => { cellSizeRef.current = cellSize; }, [cellSize]);
 
   useEffect(() => {
     const updateCellSize = () => {
@@ -438,7 +447,7 @@ const MazeBattleGame = () => {
       const gamepads = navigator.getGamepads();
       const threshold = 0.3;
 
-      // Check keyboard
+      // Check keyboard - fix: check actual pressedKeys state, not ref
       const configs = PLAYER_CONFIGS.slice(0, gameModeRef.current);
       configs.forEach(config => {
         const allKeys = [
@@ -449,11 +458,13 @@ const MazeBattleGame = () => {
           ...config.keys.break
         ];
         
-        pressedKeysRef.current.forEach(key => {
-          if (allKeys.includes(key)) {
+        // Check if any key for this player is currently pressed
+        for (const key of allKeys) {
+          if (pressedKeysRef.current.has(key)) {
             activity[`p${config.id}_keyboard`] = true;
+            break;
           }
-        });
+        }
       });
 
       // Check Gamepad 0 (P1 & P2)
@@ -673,8 +684,27 @@ const MazeBattleGame = () => {
           startGame();
         }
       };
+      
+      // Add gamepad check for Plus button to start game
+      const checkGamepadStart = () => {
+        const gamepads = navigator.getGamepads();
+        for (let i = 0; i < gamepads.length; i++) {
+          const gp = gamepads[i];
+          if (gp && gp.buttons[9]?.pressed) {  // Button 9 is Plus on Joy-Con
+            startGame();
+            return;
+          }
+        }
+        requestAnimationFrame(checkGamepadStart);
+      };
+      
       window.addEventListener('keydown', handleMenuKey, true);
-      return () => window.removeEventListener('keydown', handleMenuKey, true);
+      const rafId = requestAnimationFrame(checkGamepadStart);
+      
+      return () => {
+        window.removeEventListener('keydown', handleMenuKey, true);
+        cancelAnimationFrame(rafId);
+      };
     }
     
     if (gameState === 'finished') {
@@ -760,190 +790,56 @@ const MazeBattleGame = () => {
     return () => clearInterval(interval);
   }, [gameState]);
 
-  // Canvas rendering
+  // Canvas rendering with RAF loop
   useEffect(() => {
     if ((gameState !== 'playing' && gameState !== 'finished') || !canvasRef.current) return;
 
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const render = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    if (viewMode === 'overview') {
-      // Overview mode rendering
-      const availableSize = Math.min(window.innerWidth - 100, window.innerHeight - 350);
-      const miniCellSize = Math.floor(availableSize / mazeSize);
-      
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
-      // Draw maze
-      for (let y = 0; y < mazeSize; y++) {
-        for (let x = 0; x < mazeSize; x++) {
-          const screenX = x * miniCellSize;
-          const screenY = y * miniCellSize;
-          
-          const isWall = maze[y][x] === 1;
-          
-          if (isWall) {
-            const gradient = ctx.createLinearGradient(screenX, screenY, screenX + miniCellSize, screenY + miniCellSize);
-            gradient.addColorStop(0, '#5a5a5a');
-            gradient.addColorStop(0.5, '#3a3a3a');
-            gradient.addColorStop(1, '#2a2a2a');
-            ctx.fillStyle = gradient;
-            ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
-          } else {
-            const isBroken = brokenWalls.has(`${x},${y}`);
-            const checkerSize = Math.max(1, Math.floor(miniCellSize / 6));
+      const currentPlayers = playersRef.current;
+      const currentMaze = mazeRef.current;
+      const currentParticles = particlesRef.current;
+      const currentBrokenWalls = brokenWallsRef.current;
+      const currentViewMode = viewModeRef.current;
+      const currentCellSize = cellSizeRef.current;
+      const currentMazeSize = mazeSizeRef.current;
+
+      if (currentViewMode === 'overview') {
+        // Overview mode rendering
+        const availableSize = Math.min(window.innerWidth - 100, window.innerHeight - 350);
+        const miniCellSize = Math.floor(availableSize / currentMazeSize);
+        
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw maze
+        for (let y = 0; y < currentMazeSize; y++) {
+          for (let x = 0; x < currentMazeSize; x++) {
+            const screenX = x * miniCellSize;
+            const screenY = y * miniCellSize;
             
-            for (let cy = 0; cy < miniCellSize; cy += checkerSize) {
-              for (let cx = 0; cx < miniCellSize; cx += checkerSize) {
-                const globalX = x * miniCellSize + cx;
-                const globalY = y * miniCellSize + cy;
-                const isCheckerDark = ((Math.floor(globalX / checkerSize) + Math.floor(globalY / checkerSize)) % 2) === 0;
-                
-                let darkColor, lightColor;
-                if (isBroken) {
-                  darkColor = '#4a3019';
-                  lightColor = '#5a3a1f';
-                } else {
-                  darkColor = '#6B4423';
-                  lightColor = '#8B5A2B';
-                }
-                
-                ctx.fillStyle = isCheckerDark ? darkColor : lightColor;
-                ctx.fillRect(screenX + cx, screenY + cy, checkerSize, checkerSize);
-              }
-            }
-            
-            // Draw home bases
-            players.forEach(player => {
-              if (x === player.homeX && y === player.homeY) {
-                ctx.fillStyle = player.color + '33';
-                ctx.fillRect(screenX + 1, screenY + 1, miniCellSize - 2, miniCellSize - 2);
-              }
-            });
-          }
-        }
-      }
-      
-      // Draw trails
-      players.forEach(player => {
-        if (player.footprintPath.length < 2) return;
-        
-        for (let i = 0; i < player.footprintPath.length - 1; i++) {
-          const p0 = player.footprintPath[i];
-          const p1 = player.footprintPath[i + 1];
-          
-          const screenX0 = p0.x * miniCellSize + miniCellSize / 2;
-          const screenY0 = p0.y * miniCellSize + miniCellSize / 2;
-          const screenX1 = p1.x * miniCellSize + miniCellSize / 2;
-          const screenY1 = p1.y * miniCellSize + miniCellSize / 2;
-          
-          const alpha = 0.3 + (i / player.footprintPath.length) * 0.4;
-          ctx.strokeStyle = player.color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
-          ctx.lineWidth = Math.max(2, miniCellSize / 6);
-          ctx.lineCap = 'round';
-          
-          ctx.beginPath();
-          ctx.moveTo(screenX0, screenY0);
-          ctx.lineTo(screenX1, screenY1);
-          ctx.stroke();
-        }
-      });
-      
-      // Draw players
-      players.forEach(player => {
-        const centerX = player.x * miniCellSize + miniCellSize / 2;
-        const centerY = player.y * miniCellSize + miniCellSize / 2;
-        const radius = Math.max(3, miniCellSize / 3);
-        
-        ctx.fillStyle = player.color;
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // Draw eyes
-        ctx.fillStyle = '#FFF';
-        const eyeSize = Math.max(1, miniCellSize / 12);
-        const eyeOffset = radius / 2;
-        
-        let eye1X, eye1Y, eye2X, eye2Y;
-        const { dx, dy } = player.direction;
-        
-        if (dx === 1 && dy === 0) {
-          eye1X = centerX + eyeOffset;
-          eye1Y = centerY - eyeSize;
-          eye2X = centerX + eyeOffset;
-          eye2Y = centerY + eyeSize;
-        } else if (dx === -1 && dy === 0) {
-          eye1X = centerX - eyeOffset;
-          eye1Y = centerY - eyeSize;
-          eye2X = centerX - eyeOffset;
-          eye2Y = centerY + eyeSize;
-        } else if (dx === 0 && dy === -1) {
-          eye1X = centerX - eyeSize;
-          eye1Y = centerY - eyeOffset;
-          eye2X = centerX + eyeSize;
-          eye2Y = centerY - eyeOffset;
-        } else if (dx === 0 && dy === 1) {
-          eye1X = centerX - eyeSize;
-          eye1Y = centerY + eyeOffset;
-          eye2X = centerX + eyeSize;
-          eye2Y = centerY + eyeOffset;
-        }
-        
-        ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
-        ctx.fillRect(eye2X - eyeSize / 2, eye2Y - eyeSize / 2, eyeSize, eyeSize);
-      });
-      
-    } else {
-      // Circle view mode
-      const MAX_VISIBILITY = 5; // Fixed layout based on max visibility
-      const fixedViewWidth = (MAX_VISIBILITY * 2 + 1) * cellSize;
-      const margin = 30;
-      
-      players.forEach((player, index) => {
-        const VISIBILITY = player.visibility;
-        
-        // Calculate fixed center position
-        const centerX = index * (fixedViewWidth + margin) + (MAX_VISIBILITY * cellSize) + cellSize / 2;
-        const centerY = (MAX_VISIBILITY * cellSize) + cellSize / 2;
-        const radius = VISIBILITY * cellSize + cellSize / 2;
-        
-        // Set up circular clipping
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-        ctx.clip();
-        
-        // Draw maze from player's perspective
-        for (let dy = -VISIBILITY; dy <= VISIBILITY; dy++) {
-          for (let dx = -VISIBILITY; dx <= VISIBILITY; dx++) {
-            const x = player.x + dx;
-            const y = player.y + dy;
-
-            // Position relative to fixed center
-            const screenX = centerX + (dx * cellSize) - cellSize / 2;
-            const screenY = centerY + (dy * cellSize) - cellSize / 2;
-
-            const isOutOfBounds = x < 0 || x >= mazeSize || y < 0 || y >= mazeSize;
-            const isWall = isOutOfBounds || maze[y][x] === 1;
+            const isWall = currentMaze[y][x] === 1;
             
             if (isWall) {
-              const gradient = ctx.createLinearGradient(screenX, screenY, screenX + cellSize, screenY + cellSize);
+              const gradient = ctx.createLinearGradient(screenX, screenY, screenX + miniCellSize, screenY + miniCellSize);
               gradient.addColorStop(0, '#5a5a5a');
               gradient.addColorStop(0.5, '#3a3a3a');
               gradient.addColorStop(1, '#2a2a2a');
               ctx.fillStyle = gradient;
-              ctx.fillRect(screenX, screenY, cellSize, cellSize);
+              ctx.fillRect(screenX, screenY, miniCellSize, miniCellSize);
             } else {
-              const isBroken = brokenWalls.has(`${x},${y}`);
-              const checkerSize = 3;
+              const isBroken = currentBrokenWalls.has(`${x},${y}`);
+              const checkerSize = Math.max(1, Math.floor(miniCellSize / 6));
               
-              for (let cy = 0; cy < cellSize; cy += checkerSize) {
-                for (let cx = 0; cx < cellSize; cx += checkerSize) {
-                  const globalX = x * cellSize + cx;
-                  const globalY = y * cellSize + cy;
+              for (let cy = 0; cy < miniCellSize; cy += checkerSize) {
+                for (let cx = 0; cx < miniCellSize; cx += checkerSize) {
+                  const globalX = x * miniCellSize + cx;
+                  const globalY = y * miniCellSize + cy;
                   const isCheckerDark = ((Math.floor(globalX / checkerSize) + Math.floor(globalY / checkerSize)) % 2) === 0;
                   
                   let darkColor, lightColor;
@@ -959,194 +855,348 @@ const MazeBattleGame = () => {
                   ctx.fillRect(screenX + cx, screenY + cy, checkerSize, checkerSize);
                 }
               }
-
-              // Highlight home bases
-              players.forEach(otherPlayer => {
-                if (x === otherPlayer.homeX && y === otherPlayer.homeY) {
-                  ctx.fillStyle = otherPlayer.color + '33';
-                  ctx.fillRect(screenX + 2, screenY + 2, cellSize - 4, cellSize - 4);
+              
+              // Draw home bases
+              currentPlayers.forEach(player => {
+                if (x === player.homeX && y === player.homeY) {
+                  ctx.fillStyle = player.color + '33';
+                  ctx.fillRect(screenX + 1, screenY + 1, miniCellSize - 2, miniCellSize - 2);
                 }
               });
             }
           }
         }
-
-        // Draw all trails visible to this player
-        players.forEach(trailPlayer => {
-          if (trailPlayer.footprintPath.length < 2) return;
+        
+        // Draw trails
+        currentPlayers.forEach(player => {
+          if (player.footprintPath.length < 2) return;
           
-          for (let i = 0; i < trailPlayer.footprintPath.length - 1; i++) {
-            const p0 = trailPlayer.footprintPath[i];
-            const p1 = trailPlayer.footprintPath[i + 1];
+          for (let i = 0; i < player.footprintPath.length - 1; i++) {
+            const p0 = player.footprintPath[i];
+            const p1 = player.footprintPath[i + 1];
             
-            const dx0 = p0.x - player.x;
-            const dy0 = p0.y - player.y;
-            const dx1 = p1.x - player.x;
-            const dy1 = p1.y - player.y;
+            const screenX0 = p0.x * miniCellSize + miniCellSize / 2;
+            const screenY0 = p0.y * miniCellSize + miniCellSize / 2;
+            const screenX1 = p1.x * miniCellSize + miniCellSize / 2;
+            const screenY1 = p1.y * miniCellSize + miniCellSize / 2;
             
-            if (Math.abs(dx0) <= VISIBILITY && Math.abs(dy0) <= VISIBILITY &&
-                Math.abs(dx1) <= VISIBILITY && Math.abs(dy1) <= VISIBILITY) {
-              
-              const screenX0 = centerX + (dx0 * cellSize);
-              const screenY0 = centerY + (dy0 * cellSize);
-              const screenX1 = centerX + (dx1 * cellSize);
-              const screenY1 = centerY + (dy1 * cellSize);
-              
-              const alpha = 0.2 + (i / trailPlayer.footprintPath.length) * 0.5;
-              const baseWidth = 4;
-              const wavyWidth = baseWidth + Math.sin(i * 0.3) * 1.5;
-              
-              const cpX = (screenX0 + screenX1) / 2 + Math.sin(i * 0.5) * 2;
-              const cpY = (screenY0 + screenY1) / 2 + Math.cos(i * 0.5) * 2;
-              
-              ctx.strokeStyle = trailPlayer.color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
-              ctx.lineWidth = wavyWidth;
-              ctx.lineCap = 'round';
-              ctx.lineJoin = 'round';
-              
-              ctx.beginPath();
-              ctx.moveTo(screenX0, screenY0);
-              ctx.quadraticCurveTo(cpX, cpY, screenX1, screenY1);
-              ctx.stroke();
-            }
-          }
-        });
-
-        // Draw other players if visible
-        players.forEach(otherPlayer => {
-          if (otherPlayer.id === player.id) return;
-          
-          const otherDx = otherPlayer.x - player.x;
-          const otherDy = otherPlayer.y - player.y;
-          
-          if (Math.abs(otherDx) <= VISIBILITY && Math.abs(otherDy) <= VISIBILITY) {
-            const otherScreenX = centerX + (otherDx * cellSize);
-            const otherScreenY = centerY + (otherDy * cellSize);
+            const alpha = 0.3 + (i / player.footprintPath.length) * 0.4;
+            ctx.strokeStyle = player.color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
+            ctx.lineWidth = Math.max(2, miniCellSize / 6);
+            ctx.lineCap = 'round';
             
-            ctx.fillStyle = otherPlayer.color;
             ctx.beginPath();
-            ctx.arc(otherScreenX, otherScreenY + 2, cellSize / 2.5, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // Draw eyes for other player
-            ctx.fillStyle = '#FFF';
-            const eyeSize = 3;
-            const eyeOffset = cellSize / 4;
-            
-            let oeye1X, oeye1Y, oeye2X, oeye2Y;
-            const { dx, dy } = otherPlayer.direction;
-            
-            if (dx === 1 && dy === 0) {
-              oeye1X = otherScreenX + eyeOffset;
-              oeye1Y = otherScreenY - eyeSize;
-              oeye2X = otherScreenX + eyeOffset;
-              oeye2Y = otherScreenY + eyeSize;
-            } else if (dx === -1 && dy === 0) {
-              oeye1X = otherScreenX - eyeOffset;
-              oeye1Y = otherScreenY - eyeSize;
-              oeye2X = otherScreenX - eyeOffset;
-              oeye2Y = otherScreenY + eyeSize;
-            } else if (dx === 0 && dy === -1) {
-              oeye1X = otherScreenX - eyeSize;
-              oeye1Y = otherScreenY - eyeOffset;
-              oeye2X = otherScreenX + eyeSize;
-              oeye2Y = otherScreenY - eyeOffset;
-            } else if (dx === 0 && dy === 1) {
-              oeye1X = otherScreenX - eyeSize;
-              oeye1Y = otherScreenY + eyeOffset;
-              oeye2X = otherScreenX + eyeSize;
-              oeye2Y = otherScreenY + eyeOffset;
-            }
-            
-            ctx.fillRect(oeye1X - eyeSize / 2, oeye1Y - eyeSize / 2, eyeSize, eyeSize);
-            ctx.fillRect(oeye2X - eyeSize / 2, oeye2Y - eyeSize / 2, eyeSize, eyeSize);
+            ctx.moveTo(screenX0, screenY0);
+            ctx.lineTo(screenX1, screenY1);
+            ctx.stroke();
           }
         });
-
-        // Draw current player
-        ctx.fillStyle = player.color;
-        ctx.beginPath();
-        ctx.arc(centerX, centerY + 2, cellSize / 2.5, 0, Math.PI * 2);
-        ctx.fill();
         
-        // Draw player eyes
-        ctx.fillStyle = '#FFF';
-        const eyeSize = 3;
-        const eyeOffset = cellSize / 4;
+        // Draw players
+        currentPlayers.forEach(player => {
+          const centerX = player.x * miniCellSize + miniCellSize / 2;
+          const centerY = player.y * miniCellSize + miniCellSize / 2;
+          const radius = Math.max(3, miniCellSize / 3);
+          
+          ctx.fillStyle = player.color;
+          ctx.beginPath();
+          ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Draw eyes
+          ctx.fillStyle = '#FFF';
+          const eyeSize = Math.max(1, miniCellSize / 12);
+          const eyeOffset = radius / 2;
+          
+          let eye1X, eye1Y, eye2X, eye2Y;
+          const { dx, dy } = player.direction;
+          
+          if (dx === 1 && dy === 0) {
+            eye1X = centerX + eyeOffset;
+            eye1Y = centerY - eyeSize;
+            eye2X = centerX + eyeOffset;
+            eye2Y = centerY + eyeSize;
+          } else if (dx === -1 && dy === 0) {
+            eye1X = centerX - eyeOffset;
+            eye1Y = centerY - eyeSize;
+            eye2X = centerX - eyeOffset;
+            eye2Y = centerY + eyeSize;
+          } else if (dx === 0 && dy === -1) {
+            eye1X = centerX - eyeSize;
+            eye1Y = centerY - eyeOffset;
+            eye2X = centerX + eyeSize;
+            eye2Y = centerY - eyeOffset;
+          } else if (dx === 0 && dy === 1) {
+            eye1X = centerX - eyeSize;
+            eye1Y = centerY + eyeOffset;
+            eye2X = centerX + eyeSize;
+            eye2Y = centerY + eyeOffset;
+          }
+          
+          ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
+          ctx.fillRect(eye2X - eyeSize / 2, eye2Y - eyeSize / 2, eyeSize, eyeSize);
+        });
         
-        let eye1X, eye1Y, eye2X, eye2Y;
-        const { dx, dy } = player.direction;
-        
-        if (dx === 1 && dy === 0) {
-          eye1X = centerX + eyeOffset;
-          eye1Y = centerY - eyeSize;
-          eye2X = centerX + eyeOffset;
-          eye2Y = centerY + eyeSize;
-        } else if (dx === -1 && dy === 0) {
-          eye1X = centerX - eyeOffset;
-          eye1Y = centerY - eyeSize;
-          eye2X = centerX - eyeOffset;
-          eye2Y = centerY + eyeSize;
-        } else if (dx === 0 && dy === -1) {
-          eye1X = centerX - eyeSize;
-          eye1Y = centerY - eyeOffset;
-          eye2X = centerX + eyeSize;
-          eye2Y = centerY - eyeOffset;
-        } else if (dx === 0 && dy === 1) {
-          eye1X = centerX - eyeSize;
-          eye1Y = centerY + eyeOffset;
-          eye2X = centerX + eyeSize;
-          eye2Y = centerY + eyeOffset;
-        }
-        
-        ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
-        ctx.fillRect(eye2X - eyeSize / 2, eye2Y - eyeSize / 2, eyeSize, eyeSize);
-        
-        ctx.restore();
-      });
-    }
-    
-    // Draw particles
-    particles.forEach(p => {
-      const player = players.find(pl => pl.id === p.playerNum);
-      if (!player) return;
-      
-      if (viewMode === 'overview') {
-        const availableSize = Math.min(window.innerWidth - 100, window.innerHeight - 350);
-        const miniCellSize = Math.floor(availableSize / mazeSize);
-        const screenX = p.x * miniCellSize + p.vx * 2;
-        const screenY = p.y * miniCellSize + p.vy * 2;
-        
-        ctx.fillStyle = player.color + Math.floor((p.life / 30) * 255).toString(16).padStart(2, '0');
-        ctx.beginPath();
-        ctx.arc(screenX, screenY, 2, 0, Math.PI * 2);
-        ctx.fill();
       } else {
+        // Circle view mode
         const MAX_VISIBILITY = 5;
-        const fixedViewWidth = (MAX_VISIBILITY * 2 + 1) * cellSize;
+        const fixedViewWidth = (MAX_VISIBILITY * 2 + 1) * currentCellSize;
         const margin = 30;
         
-        players.forEach((viewPlayer, index) => {
-          const VISIBILITY = viewPlayer.visibility;
-          const dx = p.x - viewPlayer.x;
-          const dy = p.y - viewPlayer.y;
+        currentPlayers.forEach((player, index) => {
+          const VISIBILITY = player.visibility;
           
-          if (Math.abs(dx) <= VISIBILITY && Math.abs(dy) <= VISIBILITY) {
-            const centerX = index * (fixedViewWidth + margin) + (MAX_VISIBILITY * cellSize) + cellSize / 2;
-            const centerY = (MAX_VISIBILITY * cellSize) + cellSize / 2;
-            const screenX = centerX + (dx * cellSize) + p.vx * 2;
-            const screenY = centerY + (dy * cellSize) + p.vy * 2;
-            
-            ctx.fillStyle = player.color + Math.floor((p.life / 30) * 255).toString(16).padStart(2, '0');
-            ctx.beginPath();
-            ctx.arc(screenX, screenY, 2, 0, Math.PI * 2);
-            ctx.fill();
+          // Calculate fixed center position
+          const centerX = index * (fixedViewWidth + margin) + (MAX_VISIBILITY * currentCellSize) + currentCellSize / 2;
+          const centerY = (MAX_VISIBILITY * currentCellSize) + currentCellSize / 2;
+          const radius = VISIBILITY * currentCellSize + currentCellSize / 2;
+          
+          // Set up circular clipping
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+          ctx.clip();
+          
+          // Draw maze from player's perspective
+          for (let dy = -VISIBILITY; dy <= VISIBILITY; dy++) {
+            for (let dx = -VISIBILITY; dx <= VISIBILITY; dx++) {
+              const x = player.x + dx;
+              const y = player.y + dy;
+
+              // Position relative to fixed center
+              const screenX = centerX + (dx * currentCellSize) - currentCellSize / 2;
+              const screenY = centerY + (dy * currentCellSize) - currentCellSize / 2;
+
+              const isOutOfBounds = x < 0 || x >= currentMazeSize || y < 0 || y >= currentMazeSize;
+              const isWall = isOutOfBounds || currentMaze[y][x] === 1;
+              
+              if (isWall) {
+                const gradient = ctx.createLinearGradient(screenX, screenY, screenX + currentCellSize, screenY + currentCellSize);
+                gradient.addColorStop(0, '#5a5a5a');
+                gradient.addColorStop(0.5, '#3a3a3a');
+                gradient.addColorStop(1, '#2a2a2a');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(screenX, screenY, currentCellSize, currentCellSize);
+              } else {
+                const isBroken = currentBrokenWalls.has(`${x},${y}`);
+                const checkerSize = 3;
+                
+                for (let cy = 0; cy < currentCellSize; cy += checkerSize) {
+                  for (let cx = 0; cx < currentCellSize; cx += checkerSize) {
+                    const globalX = x * currentCellSize + cx;
+                    const globalY = y * currentCellSize + cy;
+                    const isCheckerDark = ((Math.floor(globalX / checkerSize) + Math.floor(globalY / checkerSize)) % 2) === 0;
+                    
+                    let darkColor, lightColor;
+                    if (isBroken) {
+                      darkColor = '#4a3019';
+                      lightColor = '#5a3a1f';
+                    } else {
+                      darkColor = '#6B4423';
+                      lightColor = '#8B5A2B';
+                    }
+                    
+                    ctx.fillStyle = isCheckerDark ? darkColor : lightColor;
+                    ctx.fillRect(screenX + cx, screenY + cy, checkerSize, checkerSize);
+                  }
+                }
+
+                // Highlight home bases
+                currentPlayers.forEach(otherPlayer => {
+                  if (x === otherPlayer.homeX && y === otherPlayer.homeY) {
+                    ctx.fillStyle = otherPlayer.color + '33';
+                    ctx.fillRect(screenX + 2, screenY + 2, currentCellSize - 4, currentCellSize - 4);
+                  }
+                });
+              }
+            }
           }
+
+          // Draw all trails visible to this player
+          currentPlayers.forEach(trailPlayer => {
+            if (trailPlayer.footprintPath.length < 2) return;
+            
+            for (let i = 0; i < trailPlayer.footprintPath.length - 1; i++) {
+              const p0 = trailPlayer.footprintPath[i];
+              const p1 = trailPlayer.footprintPath[i + 1];
+              
+              const dx0 = p0.x - player.x;
+              const dy0 = p0.y - player.y;
+              const dx1 = p1.x - player.x;
+              const dy1 = p1.y - player.y;
+              
+              if (Math.abs(dx0) <= VISIBILITY && Math.abs(dy0) <= VISIBILITY &&
+                  Math.abs(dx1) <= VISIBILITY && Math.abs(dy1) <= VISIBILITY) {
+                
+                const screenX0 = centerX + (dx0 * currentCellSize);
+                const screenY0 = centerY + (dy0 * currentCellSize);
+                const screenX1 = centerX + (dx1 * currentCellSize);
+                const screenY1 = centerY + (dy1 * currentCellSize);
+                
+                const alpha = 0.2 + (i / trailPlayer.footprintPath.length) * 0.5;
+                const baseWidth = 4;
+                const wavyWidth = baseWidth + Math.sin(i * 0.3) * 1.5;
+                
+                const cpX = (screenX0 + screenX1) / 2 + Math.sin(i * 0.5) * 2;
+                const cpY = (screenY0 + screenY1) / 2 + Math.cos(i * 0.5) * 2;
+                
+                ctx.strokeStyle = trailPlayer.color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
+                ctx.lineWidth = wavyWidth;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                
+                ctx.beginPath();
+                ctx.moveTo(screenX0, screenY0);
+                ctx.quadraticCurveTo(cpX, cpY, screenX1, screenY1);
+                ctx.stroke();
+              }
+            }
+          });
+
+          // Draw other players if visible
+          currentPlayers.forEach(otherPlayer => {
+            if (otherPlayer.id === player.id) return;
+            
+            const otherDx = otherPlayer.x - player.x;
+            const otherDy = otherPlayer.y - player.y;
+            
+            if (Math.abs(otherDx) <= VISIBILITY && Math.abs(otherDy) <= VISIBILITY) {
+              const otherScreenX = centerX + (otherDx * currentCellSize);
+              const otherScreenY = centerY + (otherDy * currentCellSize);
+              
+              ctx.fillStyle = otherPlayer.color;
+              ctx.beginPath();
+              ctx.arc(otherScreenX, otherScreenY + 2, currentCellSize / 2.5, 0, Math.PI * 2);
+              ctx.fill();
+              
+              // Draw eyes for other player
+              ctx.fillStyle = '#FFF';
+              const eyeSize = 3;
+              const eyeOffset = currentCellSize / 4;
+              
+              let oeye1X, oeye1Y, oeye2X, oeye2Y;
+              const { dx, dy } = otherPlayer.direction;
+              
+              if (dx === 1 && dy === 0) {
+                oeye1X = otherScreenX + eyeOffset;
+                oeye1Y = otherScreenY - eyeSize;
+                oeye2X = otherScreenX + eyeOffset;
+                oeye2Y = otherScreenY + eyeSize;
+              } else if (dx === -1 && dy === 0) {
+                oeye1X = otherScreenX - eyeOffset;
+                oeye1Y = otherScreenY - eyeSize;
+                oeye2X = otherScreenX - eyeOffset;
+                oeye2Y = otherScreenY + eyeSize;
+              } else if (dx === 0 && dy === -1) {
+                oeye1X = otherScreenX - eyeSize;
+                oeye1Y = otherScreenY - eyeOffset;
+                oeye2X = otherScreenX + eyeSize;
+                oeye2Y = otherScreenY - eyeOffset;
+              } else if (dx === 0 && dy === 1) {
+                oeye1X = otherScreenX - eyeSize;
+                oeye1Y = otherScreenY + eyeOffset;
+                oeye2X = otherScreenX + eyeSize;
+                oeye2Y = otherScreenY + eyeOffset;
+              }
+              
+              ctx.fillRect(oeye1X - eyeSize / 2, oeye1Y - eyeSize / 2, eyeSize, eyeSize);
+              ctx.fillRect(oeye2X - eyeSize / 2, oeye2Y - eyeSize / 2, eyeSize, eyeSize);
+            }
+          });
+
+          // Draw current player
+          ctx.fillStyle = player.color;
+          ctx.beginPath();
+          ctx.arc(centerX, centerY + 2, currentCellSize / 2.5, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Draw player eyes
+          ctx.fillStyle = '#FFF';
+          const eyeSize = 3;
+          const eyeOffset = currentCellSize / 4;
+          
+          let eye1X, eye1Y, eye2X, eye2Y;
+          const { dx, dy } = player.direction;
+          
+          if (dx === 1 && dy === 0) {
+            eye1X = centerX + eyeOffset;
+            eye1Y = centerY - eyeSize;
+            eye2X = centerX + eyeOffset;
+            eye2Y = centerY + eyeSize;
+          } else if (dx === -1 && dy === 0) {
+            eye1X = centerX - eyeOffset;
+            eye1Y = centerY - eyeSize;
+            eye2X = centerX - eyeOffset;
+            eye2Y = centerY + eyeSize;
+          } else if (dx === 0 && dy === -1) {
+            eye1X = centerX - eyeSize;
+            eye1Y = centerY - eyeOffset;
+            eye2X = centerX + eyeSize;
+            eye2Y = centerY - eyeOffset;
+          } else if (dx === 0 && dy === 1) {
+            eye1X = centerX - eyeSize;
+            eye1Y = centerY + eyeOffset;
+            eye2X = centerX + eyeSize;
+            eye2Y = centerY + eyeOffset;
+          }
+          
+          ctx.fillRect(eye1X - eyeSize / 2, eye1Y - eyeSize / 2, eyeSize, eyeSize);
+          ctx.fillRect(eye2X - eyeSize / 2, eye2Y - eyeSize / 2, eyeSize, eyeSize);
+          
+          ctx.restore();
         });
       }
-    });
-    
-  }, [gameState, players, maze, particles, brokenWalls, cellSize, viewMode, mazeSize]);
+      
+      // Draw particles
+      currentParticles.forEach(p => {
+        const player = currentPlayers.find(pl => pl.id === p.playerNum);
+        if (!player) return;
+        
+        if (currentViewMode === 'overview') {
+          const availableSize = Math.min(window.innerWidth - 100, window.innerHeight - 350);
+          const miniCellSize = Math.floor(availableSize / currentMazeSize);
+          const screenX = p.x * miniCellSize + p.vx * 2;
+          const screenY = p.y * miniCellSize + p.vy * 2;
+          
+          ctx.fillStyle = player.color + Math.floor((p.life / 30) * 255).toString(16).padStart(2, '0');
+          ctx.beginPath();
+          ctx.arc(screenX, screenY, 2, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          const MAX_VISIBILITY = 5;
+          const fixedViewWidth = (MAX_VISIBILITY * 2 + 1) * currentCellSize;
+          const margin = 30;
+          
+          currentPlayers.forEach((viewPlayer, index) => {
+            const VISIBILITY = viewPlayer.visibility;
+            const dx = p.x - viewPlayer.x;
+            const dy = p.y - viewPlayer.y;
+            
+            if (Math.abs(dx) <= VISIBILITY && Math.abs(dy) <= VISIBILITY) {
+              const centerX = index * (fixedViewWidth + margin) + (MAX_VISIBILITY * currentCellSize) + currentCellSize / 2;
+              const centerY = (MAX_VISIBILITY * currentCellSize) + currentCellSize / 2;
+              const screenX = centerX + (dx * currentCellSize) + p.vx * 2;
+              const screenY = centerY + (dy * currentCellSize) + p.vy * 2;
+              
+              ctx.fillStyle = player.color + Math.floor((p.life / 30) * 255).toString(16).padStart(2, '0');
+              ctx.beginPath();
+              ctx.arc(screenX, screenY, 2, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          });
+        }
+      });
+
+      renderLoopRef.current = requestAnimationFrame(render);
+    };
+
+    renderLoopRef.current = requestAnimationFrame(render);
+    return () => {
+      if (renderLoopRef.current) {
+        cancelAnimationFrame(renderLoopRef.current);
+      }
+    };
+  }, [gameState]);
 
   const handleBreakButton = (playerId) => {
     breakWall(playerId);
@@ -1315,10 +1365,10 @@ const MazeBattleGame = () => {
   const currentViewMode = VIEW_MODES.find(mode => mode.id === viewMode);
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4" style={{ touchAction: 'none' }}>
       {gameState === 'menu' && (
         <div className="text-center">
-          <div className="text-xs mb-2 text-gray-400">v0.7.1</div>
+          <div className="text-xs mb-2 text-gray-400">v0.7.3</div>
           <h1 className="text-5xl font-bold mb-6" style={{color: '#FFD700', textShadow: '3px 3px 0 #8B4513'}}>
             迷路バトル
           </h1>
@@ -1402,7 +1452,7 @@ const MazeBattleGame = () => {
               boxShadow: '0 4px 0 #8B4513'
             }}
           >
-            ゲーム開始 (Enter)
+            ゲーム開始 (Enter / Joy-Con +)
           </button>
 
           <div className="mb-4 bg-gray-900 p-4 rounded-lg max-w-md border-2 border-gray-700 mx-auto">
@@ -1447,7 +1497,7 @@ const MazeBattleGame = () => {
       {gameState === 'playing' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.7.1</div>
+            <div className="text-xs text-gray-400">v0.7.3</div>
             <button
               onClick={cycleViewMode}
               className="text-sm px-3 py-1 rounded transition-all bg-blue-600 hover:bg-blue-700 active:bg-blue-800 border border-yellow-500"
@@ -1506,7 +1556,7 @@ const MazeBattleGame = () => {
       {gameState === 'finished' && (
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-3 mb-2">
-            <div className="text-xs text-gray-400">v0.7.1</div>
+            <div className="text-xs text-gray-400">v0.7.3</div>
             <button
               onClick={cycleViewMode}
               className="text-sm px-3 py-1 rounded transition-all bg-blue-600 hover:bg-blue-700 active:bg-blue-800 border border-yellow-500"
