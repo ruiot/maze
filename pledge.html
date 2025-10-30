@@ -1,151 +1,485 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="ja">
 <head>
-<meta charset="UTF-8">
-<title>Pledge Maze Demo</title>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Pledge Maze Demo — Thick-wall, 4 COM</title>
 <style>
-canvas { background: #111; display:block; margin:auto; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 12px; background:#fafafa; color:#111; }
+  #controls { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+  label { font-size:13px; color:#333; }
+  select, input[type=range] { vertical-align:middle; }
+  button { padding:6px 10px; border-radius:6px; border:1px solid #888; background:#fff; cursor:pointer; }
+  button.primary { background:#2b8cff; color:white; border-color:#1f6fe6; }
+  canvas { background:#eee; border:1px solid #ccc; display:block; margin-top:8px; }
+  #legend { margin-top:8px; font-size:13px; color:#444; }
+  .small { font-size:12px; color:#666; }
 </style>
 </head>
 <body>
+<h2>Pledge Maze Demo — Thick-wall (wall & floor same-sized cells)</h2>
 
-<canvas id="c" width="600" height="600"></canvas>
+<div id="controls">
+  <label>Size:
+    <select id="sizeSelect">
+      <option value="21">21×21</option>
+      <option value="31" selected>31×31</option>
+      <option value="41">41×41</option>
+    </select>
+  </label>
+
+  <label>Wall breaks: <input id="breaks" type="range" min="0" max="9" value="6"> <span id="breaksVal">6</span></label>
+
+  <label>Speed (ms): <input id="speed" type="range" min="10" max="200" value="40"> <span id="speedVal">40</span></label>
+
+  <button id="genBtn">Generate Maze</button>
+  <button id="startBtn" class="primary">Start</button>
+  <button id="pauseBtn">Pause</button>
+
+  <div id="info" class="small">Ready</div>
+</div>
+
+<canvas id="canvas" width="800" height="800"></canvas>
+
+<div id="legend">
+  Colors (left-top → CCW): <strong style="color:#FF5A1F">Red-Orange</strong>, <strong style="color:#2A9D8F">Green</strong>, <strong style="color:#264653">Blue</strong>, <strong style="color:#FFD166">Yellow</strong>.<br>
+  Display: cell heat = pass count (B) + current positions blink (C). Algorithm: Pledge (right-hand), diagonal targets use intermediate corner (horizontal-first).
+</div>
 
 <script>
-const W = 21, H = 21; 
-const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d");
-const cellSize = canvas.width / W;
+(() => {
+  // DOM
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const sizeSelect = document.getElementById('sizeSelect');
+  const breaksRange = document.getElementById('breaks');
+  const breaksVal = document.getElementById('breaksVal');
+  const speedRange = document.getElementById('speed');
+  const speedVal = document.getElementById('speedVal');
+  const genBtn = document.getElementById('genBtn');
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const info = document.getElementById('info');
 
-const DIR = [
-  {x:0,y:-1}, //N
-  {x:1,y:0},  //E
-  {x:0,y:1},  //S
-  {x:-1,y:0}  //W
-];
-function turnRight(d){return (d+1)%4;}
-function turnLeft(d){return (d+3)%4;}
+  breaksRange.addEventListener('input', ()=> breaksVal.textContent = breaksRange.value);
+  speedRange.addEventListener('input', ()=> speedVal.textContent = speedRange.value);
 
-let maze = Array.from({length:H},()=>Array.from({length:W},()=>({wall:[1,1,1,1],vis:false})));
+  // Config/state
+  let GRID = parseInt(sizeSelect.value); // odd
+  const COLORS = ['#FF5A1F','#2A9D8F','#264653','#FFD166']; // left-top CCW: red-orange, green, blue, yellow
+  const canvasSize = 800;
+  canvas.width = canvasSize; canvas.height = canvasSize;
 
-function carve(x,y){
-  maze[y][x].vis=true;
-  let dirs=[0,1,2,3].sort(()=>Math.random()*2-1);
-  for(let d of dirs){
-    let nx=x+DIR[d].x, ny=y+DIR[d].y;
-    if(nx>=0&&ny>=0&&nx<W&&ny<H&&!maze[ny][nx].vis){
-      maze[y][x].wall[d]=0;
-      maze[ny][nx].wall[(d+2)%4]=0;
-      carve(nx,ny);
-    }
-  }
-}
-carve((Math.random()*W)|0,(Math.random()*H)|0);
+  // We use "thick-wall" grid: every cell is either wall or passage.
+  // We'll carve passages by stepping by 2 (odd indices become passage cells).
+  let grid = []; // 2D array of booleans: true = passage, false = wall
+  let passCount = []; // same shape, counters for heatmap
 
-// random 0–9 wall breaks
-let breaks = (Math.random()*10)|0;
-for(let i=0;i<breaks;i++){
-  let x = (Math.random()*W)|0, y=(Math.random()*H)|0, d=(Math.random()*4)|0;
-  let nx=x+DIR[d].x, ny=y+DIR[d].y;
-  if(nx>=0&&ny>=0&&nx<W&&ny<H){
-    maze[y][x].wall[d]=0;
-    maze[ny][nx].wall[(d+2)%4]=0;
-  }
-}
+  // Players
+  let players = []; // {pid, x,y, start:{x,y}, targets:[cornerIdx...], curTargetIdx, heading, wallFollowing, angle, path[], finished}
+  let timer = null;
+  let running = false;
 
-// players
-const starts = [
-  {x:0,y:0},             // UL
-  {x:W-1,y:0},           // UR
-  {x:W-1,y:H-1},         // LR
-  {x:0,y:H-1}            // LL
-];
-const colors = ["red","green","blue","yellow"]; //反時計回り
-let players = starts.map((s,i)=>({
-  x:s.x, y:s.y, dir:1, pledge:0,
-  order:[0,1,2,3], // corner order UL→UR→LR→LL (counterclockwise)
-  goalIndex: (i+1)%4 // next goal is clockwise relative to self
-}));
+  // Directions NESW
+  const DIRS = ['N','E','S','W'];
+  const DX = {N:0,E:1,S:0,W:-1};
+  const DY = {N:-1,E:0,S:1,W:0};
 
-function atCorner(p,cornerIdx){
-  return p.x === starts[cornerIdx].x && p.y === starts[cornerIdx].y;
-}
+  // Utility
+  function shuffle(arr){ for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } }
+  function inBounds(x,y){ return x>=0 && y>=0 && x<GRID && y<GRID; }
+  function isOdd(n){ return n%2===1; }
 
-function stepPlayer(p,i){
-  let g = p.order[p.goalIndex];
-  // reached target
-  if(atCorner(p,g)){
-    p.goalIndex = (p.goalIndex+1)%4; // move to next corner
-  }
+  // Maze generation: make grid all walls, then carve passages at odd coords using iterative recursive backtracker
+  function generateMaze(){
+    // ensure GRID is odd (if user selected even, force odd)
+    if(GRID % 2 === 0) GRID++;
 
-  // if finished full loop and returned to own start, stop
-  if(atCorner(p,i) && p.goalIndex === ((i+1)%4)) {
-    return; // finished
-  }
+    grid = Array.from({length:GRID}, ()=> Array.from({length:GRID}, ()=> false)); // false = wall
+    passCount = Array.from({length:GRID}, ()=> Array.from({length:GRID}, ()=> 0));
 
-  // Pledge right-hand
-  function can(d){
-    let nx=p.x+DIR[d].x, ny=p.y+DIR[d].y;
-    if(nx<0||ny<0||nx>=W||ny>=H) return false;
-    return maze[p.y][p.x].wall[d]===0;
-  }
+    // choose start among odd coordinates
+    const startX = (Math.floor(Math.random() * ((GRID-1)/2)) * 2) + 1;
+    const startY = (Math.floor(Math.random() * ((GRID-1)/2)) * 2) + 1;
 
-  // face goal direction bias
-  let gx = starts[g].x, gy=starts[g].y;
-  let best=0,dxSign=Math.sign(gx-p.x),dySign=Math.sign(gy-p.y);
-  if(Math.abs(gx-p.x)>Math.abs(gy-p.y)) best = dxSign>0?1:3;
-  else best = dySign>0?2:0;
-  p.dir=best;
+    const stack = [{x:startX,y:startY}];
+    grid[startY][startX] = true;
 
-  // pledge routine
-  let r=turnRight(p.dir)
-  if(p.pledge===0 && can(r)){
-    p.dir=r;
-  } else {
-    while(!can(p.dir)) { 
-      p.dir = turnLeft(p.dir);
-      p.pledge++;
-    }
-    p.pledge--;
-  }
-
-  p.x += DIR[p.dir].x;
-  p.y += DIR[p.dir].y;
-}
-
-function draw(){
-  ctx.clearRect(0,0,600,600);
-  ctx.strokeStyle="#888";
-  for(let y=0;y<H;y++){
-    for(let x=0;x<W;x++){
-      let c=maze[y][x];
-      if(c.wall[0]){ctx.beginPath();ctx.moveTo(x*cellSize,y*cellSize);ctx.lineTo((x+1)*cellSize,y*cellSize);ctx.stroke();}
-      if(c.wall[1]){ctx.beginPath();ctx.moveTo((x+1)*cellSize,y*cellSize);ctx.lineTo((x+1)*cellSize,(y+1)*cellSize);ctx.stroke();}
-      if(c.wall[2]){ctx.beginPath();ctx.moveTo((x+1)*cellSize,(y+1)*cellSize);ctx.lineTo(x*cellSize,(y+1)*cellSize);ctx.stroke();}
-      if(c.wall[3]){ctx.beginPath();ctx.moveTo(x*cellSize,(y+1)*cellSize);ctx.lineTo(x*cellSize,y*cellSize);ctx.stroke();}
+    while(stack.length){
+      const cur = stack[stack.length-1];
+      const x = cur.x, y = cur.y;
+      // neighbors two steps away
+      const neigh = [];
+      const cand = [
+        {d:'N', nx:x, ny:y-2, bx:x, by:y-1},
+        {d:'S', nx:x, ny:y+2, bx:x, by:y+1},
+        {d:'W', nx:x-2, ny:y, bx:x-1, by:y},
+        {d:'E', nx:x+2, ny:y, bx:x+1, by:y}
+      ];
+      for(const c of cand){
+        if(inBounds(c.nx,c.ny) && !grid[c.ny][c.nx]){
+          neigh.push(c);
+        }
+      }
+      if(neigh.length){
+        const pick = neigh[Math.floor(Math.random()*neigh.length)];
+        // knock down wall between cur and pick
+        grid[pick.by][pick.bx] = true;
+        grid[pick.ny][pick.nx] = true;
+        stack.push({x:pick.nx,y:pick.ny});
+      } else {
+        stack.pop();
+      }
     }
   }
 
-  players.forEach((p,i)=>{
-    ctx.fillStyle=colors[i];
-    ctx.beginPath();
-    ctx.arc(
-      (p.x+0.5)*cellSize,
-      (p.y+0.5)*cellSize,
-      cellSize*0.35,
-      0,Math.PI*2
-    );
-    ctx.fill();
+  // Wall breaks: pick random wall cells that if removed connect passages (or just open some walls)
+  function breakWalls(k){
+    const candidates = [];
+    for(let y=1;y<GRID-1;y++){
+      for(let x=1;x<GRID-1;x++){
+        if(!grid[y][x]) candidates.push({x,y});
+      }
+    }
+    shuffle(candidates);
+    for(let i=0;i<Math.min(k, candidates.length); i++){
+      const c = candidates[i];
+      grid[c.y][c.x] = true;
+    }
+  }
+
+  // Corner coordinates: we treat "corners" as the passage cells nearest to the true corners
+  // prefer positions at (1,1),(GRID-2,1),(GRID-2,GRID-2),(1,GRID-2)
+  function cornerCoord(idx){
+    if(idx===0) return {x:1, y:1}; // left-top
+    if(idx===1) return {x:GRID-2, y:1}; // right-top
+    if(idx===2) return {x:GRID-2, y:GRID-2}; // right-bottom
+    return {x:1, y:GRID-2}; // left-bottom
+  }
+
+  // Initialize players: pid 0..3 correspond to corners 0..3 (left-top, right-top, right-bottom, left-bottom)
+  // targets: for pid p: targets = [ (p+1)%4, (p+2)%4, (p+3)%4, p ] (CCW starting at next corner, then return to start)
+  function initPlayers(){
+    players = [];
+    for(let pid=0; pid<4; pid++){
+      const c = cornerCoord(pid);
+      // ensure corner cell is passage; if not, set it
+      grid[c.y][c.x] = true;
+      const targets = [];
+      for(let step=1; step<=4; step++) targets.push((pid + step) % 4);
+      const p = {
+        pid,
+        color: COLORS[pid],
+        x: c.x, y: c.y,
+        start: {x:c.x, y:c.y},
+        targets: targets.slice(),
+        curTargetIdx: 0,
+        heading: 'E', // will set toward first target
+        wallFollowing: false,
+        angle: 0,
+        stuck: 0,
+        path: [{x:c.x,y:c.y}],
+        finished: false
+      };
+      // set initial heading toward first target (horizontal preference)
+      const first = cornerCoord(p.targets[0]);
+      if(first.x > p.x) p.heading = 'E';
+      else if(first.x < p.x) p.heading = 'W';
+      else if(first.y > p.y) p.heading = 'S';
+      else p.heading = 'N';
+      players.push(p);
+      passCount[p.y][p.x] += 1;
+    }
+  }
+
+  // neighbors (passage directions) from cell
+  function availableDirs(x,y){
+    const res = [];
+    for(const d of DIRS){
+      const nx = x + DX[d], ny = y + DY[d];
+      if(inBounds(nx,ny) && grid[ny][nx]) res.push(d);
+    }
+    return res;
+  }
+
+  // map heading string to index
+  function idxOf(h){ return DIRS.indexOf(h); }
+  function rotateRight(h){ return DIRS[(idxOf(h)+1)%4]; }
+  function rotateLeft(h){ return DIRS[(idxOf(h)+3)%4]; }
+
+  // effective target: if main target is diagonal relative to player's start, return an intermediate corner first.
+  function effectiveTargetFor(p){
+    const baseIdx = p.targets[p.curTargetIdx];
+    const base = cornerCoord(baseIdx);
+    const s = p.start;
+    // if diagonal relative to start: both x and y differ
+    if(Math.abs(base.x - s.x) > 0 && Math.abs(base.y - s.y) > 0){
+      // intermediate candidates: share row with start and column with base OR share column with start and row with base
+      const cand1 = {x: base.x, y: s.y};
+      const cand2 = {x: s.x, y: base.y};
+      // map to corner index if matches
+      for(let i=0;i<4;i++){
+        const cc = cornerCoord(i);
+        if(cc.x === cand1.x && cc.y === cand1.y) return {type:'intermediate', idx:i};
+        if(cc.x === cand2.x && cc.y === cand2.y) return {type:'intermediate', idx:i};
+      }
+    }
+    return {type:'normal', idx: baseIdx};
+  }
+
+  // step player by one cell using Pledge (right-hand)
+  function stepPlayer(p){
+    if(p.finished) return;
+
+    // determine effective target
+    if(p.curTargetIdx >= p.targets.length){ p.finished = true; return; }
+    const eff = effectiveTargetFor(p);
+    const tIdx = eff.idx;
+    const tgt = cornerCoord(tIdx);
+
+    // if reached effective target
+    if(p.x === tgt.x && p.y === tgt.y){
+      // advance: for simplicity, consume the current main target if matches; otherwise advance anyway
+      p.curTargetIdx++;
+      // reset Pledge state
+      p.wallFollowing = false;
+      p.angle = 0; p.stuck = 0;
+      if(p.curTargetIdx >= p.targets.length){
+        p.finished = true;
+      }
+      return;
+    }
+
+    // compute desired heading toward effective target (horizontal-first)
+    let desired = p.heading;
+    if(tgt.x > p.x) desired = 'E';
+    else if(tgt.x < p.x) desired = 'W';
+    else if(tgt.y > p.y) desired = 'S';
+    else if(tgt.y < p.y) desired = 'N';
+
+    const can = d => {
+      const nx = p.x + DX[d], ny = p.y + DY[d];
+      return inBounds(nx,ny) && grid[ny][nx];
+    };
+
+    // if not wall-following: try to go toward desired, else enter wall-following
+    if(!p.wallFollowing){
+      if(desired !== p.heading && can(desired)) p.heading = desired;
+      if(can(p.heading)){
+        // move forward
+        p.x += DX[p.heading]; p.y += DY[p.heading];
+        p.path.push({x:p.x,y:p.y}); passCount[p.y][p.x] += 1; p.stuck = 0;
+        return;
+      } else {
+        // enter wall-following: right-hand rule
+        p.wallFollowing = true;
+        p.heading = rotateRight(p.heading);
+        p.angle += 90;
+        for(let i=0;i<4;i++){
+          if(can(p.heading)){
+            p.x += DX[p.heading]; p.y += DY[p.heading];
+            p.path.push({x:p.x,y:p.y}); passCount[p.y][p.x] += 1; p.stuck = 0;
+            return;
+          } else {
+            p.heading = rotateLeft(p.heading);
+            p.angle -= 90;
+          }
+        }
+        // fallback
+        p.wallFollowing = false; p.angle = 0; p.stuck++;
+        if(p.stuck>8){
+          const nbs = neighborsCoords(p.x,p.y);
+          if(nbs.length){
+            const pick = nbs[Math.floor(Math.random()*nbs.length)];
+            p.x = pick.x; p.y = pick.y; p.path.push({x:p.x,y:p.y}); passCount[p.y][p.x] += 1; p.stuck = 0;
+          }
+        }
+        return;
+      }
+    } else {
+      // wall-following mode: try right, forward, left, back
+      const right = rotateRight(p.heading);
+      const order = [right, p.heading, rotateLeft(p.heading), rotateLeft(rotateLeft(p.heading))];
+      let moved = false;
+      for(const h of order){
+        if(can(h)){
+          if(h === right) p.angle += 90;
+          else if(h === p.heading) p.angle += 0;
+          else if(h === rotateLeft(p.heading)) p.angle -= 90;
+          else p.angle += 180;
+          p.heading = h;
+          p.x += DX[h]; p.y += DY[h];
+          p.path.push({x:p.x,y:p.y}); passCount[p.y][p.x] += 1;
+          moved = true; break;
+        }
+      }
+      if(!moved){
+        p.wallFollowing=false; p.angle=0; p.stuck++;
+        if(p.stuck>8){
+          const nbs = neighborsCoords(p.x,p.y);
+          if(nbs.length){
+            const pick = nbs[Math.floor(Math.random()*nbs.length)];
+            p.x = pick.x; p.y = pick.y; p.path.push({x:p.x,y:p.y}); passCount[p.y][p.x] += 1; p.stuck=0;
+          }
+        }
+        return;
+      }
+      // check exit condition: angle==0 and desired open -> exit wall-following
+      if(p.angle === 0){
+        if(can(desired)) p.heading = desired;
+        p.wallFollowing = false; p.stuck = 0;
+      }
+      return;
+    }
+  }
+
+  function neighborsCoords(x,y){
+    const arr = [];
+    for(const d of DIRS){
+      const nx = x + DX[d], ny = y + DY[d];
+      if(inBounds(nx,ny) && grid[ny][nx]) arr.push({x:nx,y:ny});
+    }
+    return arr;
+  }
+
+  // Drawing: each grid cell (passage/wall) rendered as same-size squares.
+  function draw(){
+    // compute cell px
+    const px = Math.floor(Math.min(canvas.width, canvas.height) / GRID);
+    const offsetX = Math.floor((canvas.width - px*GRID)/2);
+    const offsetY = Math.floor((canvas.height - px*GRID)/2);
+
+    // background
+    ctx.fillStyle = '#eaeaea';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // heatmap background for passage cells
+    const maxPass = Math.max(1, ...passCount.flat());
+    for(let y=0;y<GRID;y++){
+      for(let x=0;x<GRID;x++){
+        const sx = offsetX + x*px, sy = offsetY + y*px;
+        if(grid[y][x]){
+          // passage: color by passCount
+          const v = passCount[y][x];
+          if(v > 0){
+            const t = Math.min(1, v / maxPass);
+            const r = Math.floor(255 * t);
+            const g = Math.floor(200 * (1 - t) + 60*(1-t));
+            const b = 60;
+            ctx.fillStyle = `rgba(${r},${g},${b},${0.7*t})`;
+          } else {
+            ctx.fillStyle = '#ffffff';
+          }
+          ctx.fillRect(sx, sy, px, px);
+        } else {
+          // wall cell
+          ctx.fillStyle = '#111';
+          ctx.fillRect(sx, sy, px, px);
+        }
+      }
+    }
+
+    // draw corner labels
+    ctx.fillStyle = '#fff';
+    ctx.font = `${Math.max(10, px/3)}px sans-serif`;
+    for(let i=0;i<4;i++){
+      const c = cornerCoord(i);
+      const sx = offsetX + c.x*px, sy = offsetY + c.y*px;
+      ctx.fillText('C'+i, sx+4, sy+Math.max(12,px/3));
+    }
+
+    // draw players' trails
+    for(const p of players){
+      ctx.beginPath();
+      ctx.lineWidth = Math.max(1, px/6);
+      ctx.strokeStyle = p.color;
+      for(let i=0;i<p.path.length;i++){
+        const pt = p.path[i];
+        const cx = offsetX + (pt.x + 0.5)*px;
+        const cy = offsetY + (pt.y + 0.5)*px;
+        if(i===0) ctx.moveTo(cx,cy); else ctx.lineTo(cx,cy);
+      }
+      ctx.stroke();
+    }
+
+    // draw players current pos blinking
+    const blinkOn = Math.floor(Date.now()/400) % 2 === 0;
+    if(blinkOn){
+      for(const p of players){
+        const cx = offsetX + (p.x + 0.5)*px;
+        const cy = offsetY + (p.y + 0.5)*px;
+        ctx.beginPath();
+        ctx.fillStyle = p.color;
+        ctx.arc(cx, cy, Math.max(3, px/3), 0, Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(cx, cy, Math.max(1, px/12), 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // Main loop tick
+  function tick(){
+    // step each non-finished player
+    for(const p of players) stepPlayer(p);
+    draw();
+    // update status
+    const status = players.map(p => `P${p.pid}:${Math.min(3,p.curTargetIdx)}/3`).join(' | ');
+    info.textContent = status;
+    if(players.every(p=>p.finished)){
+      stop();
+      info.textContent = 'All finished';
+    }
+  }
+
+  function start(){
+    if(running) return;
+    running = true;
+    const ms = Math.max(10, parseInt(speedRange.value));
+    timer = setInterval(tick, ms);
+    info.textContent = 'Running...';
+  }
+  function stop(){
+    if(timer) clearInterval(timer);
+    timer = null;
+    running = false;
+  }
+
+  // UI handlers
+  genBtn.addEventListener('click', ()=>{
+    stop();
+    GRID = parseInt(sizeSelect.value);
+    generateMaze();
+    const br = parseInt(breaksRange.value);
+    if(br>0) breakWalls(br);
+    initPlayers();
+    draw();
+    info.textContent = 'Maze generated. Ready';
   });
-}
+  startBtn.addEventListener('click', ()=>{
+    if(!grid.length){ GRID = parseInt(sizeSelect.value); generateMaze(); breakWalls(parseInt(breaksRange.value)); initPlayers(); draw(); }
+    start();
+  });
+  pauseBtn.addEventListener('click', ()=>{
+    if(running){ stop(); pauseBtn.textContent = 'Resume'; } else { start(); pauseBtn.textContent = 'Pause'; }
+  });
 
-function loop(){
-  players.forEach((p,i)=>stepPlayer(p,i));
+  // initial
+  GRID = parseInt(sizeSelect.value);
+  generateMaze();
+  breakWalls(parseInt(breaksRange.value));
+  initPlayers();
   draw();
-  requestAnimationFrame(loop);
-}
-draw();
-loop();
+
+  // responsive
+  window.addEventListener('resize', ()=>{
+    const maxW = Math.min(window.innerWidth - 40, 900);
+    canvas.width = maxW; canvas.height = maxW;
+    draw();
+  });
+})();
 </script>
 </body>
 </html>
